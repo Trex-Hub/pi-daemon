@@ -1,3 +1,4 @@
+import { mkdir } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import type { GatewayConfig, RoutingEntry } from "./state.js";
 
@@ -8,27 +9,37 @@ function sanitizeSegment(name: string): string {
   return cleaned || "unnamed";
 }
 
-/** Resolves (and caches in `routing`) the on-disk directory for a Discord channel. Throws if the resolved path would escape `config.projectsRoot`. */
-export function resolveChannelDirectory(
-  config: GatewayConfig,
-  routing: Record<string, RoutingEntry>,
-  channelId: string,
-  category: string | null,
-  channelName: string
-): string {
-  const existing = routing[channelId];
-  if (existing) return existing.dir;
-
-  const categorySegment = sanitizeSegment(category ?? UNGROUPED);
-  const channelSegment = sanitizeSegment(channelName);
-
+function resolveUnderRoot(config: GatewayConfig, category: string, channel: string): string {
   const root = resolve(config.projectsRoot);
-  const dir = resolve(root, categorySegment, channelSegment);
+  const dir = resolve(root, sanitizeSegment(category), sanitizeSegment(channel));
 
   if (dir !== root && !dir.startsWith(root + sep)) {
     throw new Error(`Resolved directory escapes projects root: ${dir}`);
   }
 
+  return dir;
+}
+
+/** Looks up an existing channel→directory mapping. Returns null for an unmapped channel (008). */
+export function lookupChannelDirectory(routing: Record<string, RoutingEntry>, channelId: string): string | null {
+  return routing[channelId]?.dir ?? null;
+}
+
+/** Computes (without persisting) the directory a channel's auto-derived category/name would map to. */
+export function candidateDirectory(config: GatewayConfig, category: string | null, channelName: string): string {
+  return resolveUnderRoot(config, category ?? UNGROUPED, channelName);
+}
+
+/** `mkdir -p`s the resolved directory and persists the channel→dir mapping (008 confirm / `/pi map`). */
+export async function mapChannel(
+  config: GatewayConfig,
+  routing: Record<string, RoutingEntry>,
+  channelId: string,
+  category: string,
+  channel: string
+): Promise<string> {
+  const dir = resolveUnderRoot(config, category, channel);
+  await mkdir(dir, { recursive: true });
   routing[channelId] = { dir };
   return dir;
 }

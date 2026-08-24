@@ -1,8 +1,12 @@
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   ChannelType,
   Client,
   Events,
   GatewayIntentBits,
+  type Interaction,
   type Message,
   Partials,
 } from "discord.js";
@@ -32,10 +36,20 @@ export interface PlaceholderHandle {
   edit(text: string): Promise<void>;
 }
 
+/** A click on one of the new-channel confirm buttons (008). */
+export interface ButtonAction {
+  channelId: string;
+  action: "create" | "attach" | "ignore";
+  category: string | null;
+  channelName: string;
+  reply(text: string): Promise<void>;
+}
+
 export class DiscordTransport {
   private client: Client | null = null;
   private botUserId = "";
   private messageHandler?: (message: IncomingMessage) => void;
+  private buttonHandler?: (action: ButtonAction) => void;
 
   constructor(
     private token: string,
@@ -44,6 +58,10 @@ export class DiscordTransport {
 
   onMessage(handler: (message: IncomingMessage) => void): void {
     this.messageHandler = handler;
+  }
+
+  onButtonAction(handler: (action: ButtonAction) => void): void {
+    this.buttonHandler = handler;
   }
 
   async connect(): Promise<void> {
@@ -70,6 +88,12 @@ export class DiscordTransport {
     client.on(Events.MessageCreate, (message) => {
       this.handleMessage(message).catch((err) => {
         console.error("[discord] message handling failed:", err);
+      });
+    });
+
+    client.on(Events.InteractionCreate, (interaction) => {
+      this.handleInteraction(interaction).catch((err) => {
+        console.error("[discord] interaction handling failed:", err);
       });
     });
 
@@ -119,6 +143,51 @@ export class DiscordTransport {
 
     const thread = await channel.threads.create({ name });
     return thread.id;
+  }
+
+  /** Posts the new/unmapped-channel confirm prompt with create/attach/ignore buttons (008). */
+  async sendConfirm(chatId: string, category: string | null, channelName: string): Promise<void> {
+    if (!this.client) throw new Error("Discord not connected");
+
+    const channel = await this.client.channels.fetch(chatId);
+    if (!channel?.isTextBased() || !("send" in channel)) throw new Error(`Cannot send to channel ${chatId}`);
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`pi:create:${chatId}`)
+        .setLabel(`Create ${category ?? "ungrouped"}/${channelName}`)
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`pi:attach:${chatId}`).setLabel("Attach to existing folder").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`pi:ignore:${chatId}`).setLabel("Ignore").setStyle(ButtonStyle.Secondary)
+    );
+
+    await channel.send({
+      content: "This channel isn't mapped to a project directory yet. I've started an ephemeral session so you get an answer now — pick one:",
+      components: [row],
+    });
+  }
+
+  private async handleInteraction(interaction: Interaction): Promise<void> {
+    if (!interaction.isButton()) return;
+    const [ns, action, channelId] = interaction.customId.split(":");
+    if (ns !== "pi" || !this.buttonHandler) return;
+    if (action !== "create" && action !== "attach" && action !== "ignore") return;
+
+    await interaction.deferUpdate();
+
+    const channel = interaction.channel;
+    const category = channel && "parent" in channel ? (channel.parent?.name ?? null) : null;
+    const channelName = channel && "name" in channel ? (channel.name ?? channelId) : channelId;
+
+    this.buttonHandler({
+      channelId,
+      action,
+      category,
+      channelName,
+      reply: async (text: string) => {
+        await interaction.followUp(text);
+      },
+    });
   }
 
   private async handleMessage(message: Message): Promise<void> {

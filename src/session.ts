@@ -77,6 +77,14 @@ export class SessionManager {
     session.process.stdin?.write(`${JSON.stringify({ type: "prompt", message })}\n`);
   }
 
+  /** Kills and drops the session for `channelId`, if any (e.g. switching an ephemeral session to its mapped dir — 008). */
+  drop(channelId: string): void {
+    const session = this.sessions.get(channelId);
+    if (!session) return;
+    this.sessions.delete(channelId);
+    session.process.kill();
+  }
+
   /** Kills and drops any session idle past the timeout. Call on an interval. */
   reapIdle(now: number = Date.now()): void {
     for (const [channelId, session] of this.sessions) {

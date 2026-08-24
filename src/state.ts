@@ -27,6 +27,8 @@ export interface GatewayState {
   config: GatewayConfig;
   routing: Record<string, RoutingEntry>;
   auth: AuthState;
+  /** Channels where the user picked "Ignore" on the new-channel confirm (008) — no session, no re-prompt. */
+  ignoredChannels: string[];
 }
 
 export const DEFAULT_STATE_PATH = join(homedir(), ".pi", "agent", "gateway", "state.json");
@@ -44,6 +46,7 @@ export function defaultState(): GatewayState {
       channelModes: {},
       trustedUsers: [],
     },
+    ignoredChannels: [],
   };
 }
 

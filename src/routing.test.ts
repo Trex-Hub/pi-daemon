@@ -1,6 +1,8 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveChannelDirectory } from "./routing.js";
+import { candidateDirectory, lookupChannelDirectory, mapChannel } from "./routing.js";
 import type { GatewayConfig, RoutingEntry } from "./state.js";
 
 const config: GatewayConfig = {
@@ -10,30 +12,33 @@ const config: GatewayConfig = {
   notifyOnCrash: true,
 };
 
-describe("resolveChannelDirectory", () => {
+describe("candidateDirectory", () => {
   it("nests under category", () => {
-    const routing: Record<string, RoutingEntry> = {};
-    const dir = resolveChannelDirectory(config, routing, "c1", "work", "general");
-    expect(dir).toBe(join("/root/projects", "work", "general"));
+    expect(candidateDirectory(config, "work", "general")).toBe(join("/root/projects", "work", "general"));
   });
 
   it("falls back to ungrouped when category is null", () => {
-    const routing: Record<string, RoutingEntry> = {};
-    const dir = resolveChannelDirectory(config, routing, "c1", null, "general");
-    expect(dir).toBe(join("/root/projects", "ungrouped", "general"));
-  });
-
-  it("caches resolution by channelId, ignoring later renames", () => {
-    const routing: Record<string, RoutingEntry> = {};
-    const first = resolveChannelDirectory(config, routing, "c1", "work", "general");
-    const second = resolveChannelDirectory(config, routing, "c1", "other", "renamed");
-    expect(second).toBe(first);
+    expect(candidateDirectory(config, null, "general")).toBe(join("/root/projects", "ungrouped", "general"));
   });
 
   it("sanitizes path-traversal attempts in category/channel names", () => {
-    const routing: Record<string, RoutingEntry> = {};
-    const dir = resolveChannelDirectory(config, routing, "c1", "../../etc", "../../passwd");
+    const dir = candidateDirectory(config, "../../etc", "../../passwd");
     expect(dir.startsWith(`${join("/root/projects")}/`)).toBe(true);
     expect(dir).not.toContain("../");
+  });
+});
+
+describe("lookupChannelDirectory + mapChannel", () => {
+  it("is unmapped until mapChannel persists it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-gateway-test-"));
+    const liveConfig: GatewayConfig = { ...config, projectsRoot: root };
+    const routing: Record<string, RoutingEntry> = {};
+
+    expect(lookupChannelDirectory(routing, "c1")).toBeNull();
+
+    const dir = await mapChannel(liveConfig, routing, "c1", "work", "general");
+
+    expect(dir).toBe(join(root, "work", "general"));
+    expect(lookupChannelDirectory(routing, "c1")).toBe(dir);
   });
 });
