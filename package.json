@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "pi-gateway": "dist/index.js"
+    "pi-gateway": "dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
