@@ -6,7 +6,7 @@ function makeState(overrides?: Partial<GatewayState["auth"]>): GatewayState {
   return {
     config: { discordToken: "t", adminUserId: "admin1", projectsRoot: "/root", notifyOnCrash: true },
     routing: {},
-    auth: { channelModes: {}, trustedUsers: [], ...overrides },
+    auth: { channelModes: {}, guildModes: {}, trustedUsers: [], ...overrides },
     ignoredChannels: [],
   };
 }
@@ -37,6 +37,25 @@ describe("channel mode enforcement", () => {
     const auth = makeAuth(state);
     expect(await auth.checkAuthorization("u1", "chan1", "user", true, false, "discord")).toBe(false);
     expect(await auth.checkAuthorization("u1", "chan1", "user", true, true, "discord")).toBe(true);
+  });
+
+  it("falls back to guild mode when channel is unconfigured", async () => {
+    const state = makeState({ guildModes: { guild1: "all" } });
+    const auth = makeAuth(state);
+    expect(await auth.checkAuthorization("u1", "chan1", "user", true, false, "discord", undefined, "guild1")).toBe(
+      true
+    );
+    expect(await auth.checkAuthorization("u1", "chan1", "user", true, false, "discord", undefined, "guild2")).toBe(
+      false
+    );
+  });
+
+  it("channel mode wins over guild mode when both are set", async () => {
+    const state = makeState({ channelModes: { chan1: "trusted-only" }, guildModes: { guild1: "all" } });
+    const auth = makeAuth(state);
+    expect(await auth.checkAuthorization("u1", "chan1", "user", true, false, "discord", undefined, "guild1")).toBe(
+      false
+    );
   });
 
   it("trusted-only mode requires trusted user", async () => {

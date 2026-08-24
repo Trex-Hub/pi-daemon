@@ -17,8 +17,8 @@ export type SendMessage = (chatId: string, text: string) => Promise<void>;
 
 // Commands that mutate auth state. Restricted to the single admin
 // (config.adminUserId), not any trusted user — a trusted-only gate would let
-// any trusted user grant channel-wide access to strangers via /enable.
-const ADMIN_ONLY_COMMANDS = new Set(["/enable", "/disable", "/revoke"]);
+// any trusted user grant channel-wide/guild-wide access to strangers via /enable.
+const ADMIN_ONLY_COMMANDS = new Set(["/enable", "/disable", "/enable-guild", "/disable-guild", "/revoke"]);
 
 /** Challenge-code onboarding + 3-tier channel auth against GatewayState. */
 export class GatewayAuth {
@@ -44,7 +44,7 @@ export class GatewayAuth {
     return `discord:${this.state.config.adminUserId}`;
   }
 
-  /** DM: challenge-gated. Group: channel mode-gated (unconfigured channel = no access). */
+  /** DM: challenge-gated. Group: channel mode wins if set, else falls back to the channel's guild mode. */
   async checkAuthorization(
     userId: string,
     chatId: string,
@@ -52,7 +52,8 @@ export class GatewayAuth {
     isGroupChat: boolean,
     wasMentioned: boolean,
     transport: string,
-    sendMessage?: SendMessage
+    sendMessage?: SendMessage,
+    guildId?: string
   ): Promise<boolean> {
     const namespacedUserId: TrustedUserId = `${transport}:${userId}`;
 
@@ -67,7 +68,7 @@ export class GatewayAuth {
       return this.initiateChallenge(namespacedUserId, chatId, username, sendMessage);
     }
 
-    const mode = this.state.auth.channelModes[chatId];
+    const mode = this.state.auth.channelModes[chatId] ?? (guildId ? this.state.auth.guildModes[guildId] : undefined);
     if (!mode) return false;
     return this.evaluateMode(mode, namespacedUserId, wasMentioned);
   }
@@ -184,6 +185,35 @@ export class GatewayAuth {
         this.onNotify(`Channel ${parts[1]} disabled`, "info");
         return true;
 
+      case "/guilds": {
+        const entries = Object.entries(this.state.auth.guildModes);
+        const list = entries.map(([id, mode]) => `- ${id}: ${mode}`).join("\n");
+        await sendMessage(list || "No guilds configured");
+        return true;
+      }
+
+      case "/enable-guild":
+        if (parts.length < 3 || !isChannelAuthMode(parts[2])) {
+          await sendMessage("Usage: /enable-guild <guildId> <all|mentions|trusted-only>");
+          return true;
+        }
+        this.state.auth.guildModes[parts[1]] = parts[2];
+        this.onSaveAuth?.();
+        await sendMessage(`Guild ${parts[1]} enabled (mode: ${parts[2]})`);
+        this.onNotify(`Guild ${parts[1]} enabled (${parts[2]})`, "info");
+        return true;
+
+      case "/disable-guild":
+        if (parts.length < 2) {
+          await sendMessage("Usage: /disable-guild <guildId>");
+          return true;
+        }
+        delete this.state.auth.guildModes[parts[1]];
+        this.onSaveAuth?.();
+        await sendMessage(`Guild ${parts[1]} disabled`);
+        this.onNotify(`Guild ${parts[1]} disabled`, "info");
+        return true;
+
       case "/revoke": {
         if (parts.length < 2) {
           await sendMessage("Usage: /revoke <transport:userId>");
@@ -254,10 +284,13 @@ export class GatewayAuth {
 - \`/help\` — Show this help
 - \`/trusted\` — List trusted users
 - \`/channels\` — List enabled channels
+- \`/guilds\` — List enabled guilds (whole-server defaults)
 
 *Admin only:*
 - \`/enable <channelId> <all|mentions|trusted-only>\` — Enable a channel
 - \`/disable <channelId>\` — Disable a channel
+- \`/enable-guild <guildId> <all|mentions|trusted-only>\` — Enable an entire server; a channel rule always wins over the guild rule
+- \`/disable-guild <guildId>\` — Disable a guild
 - \`/revoke <transport:userId>\` — Revoke trust for a user
 
 *Authentication:*

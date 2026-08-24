@@ -20,6 +20,8 @@ export interface GatewayConfig {
 
 export interface AuthState {
   channelModes: Record<string, ChannelAuthMode>;
+  /** Whole-server default mode, keyed by guildId. A channelModes entry for the same channel wins. */
+  guildModes: Record<string, ChannelAuthMode>;
   trustedUsers: TrustedUserId[];
 }
 
@@ -44,6 +46,7 @@ export function defaultState(): GatewayState {
     routing: {},
     auth: {
       channelModes: {},
+      guildModes: {},
       trustedUsers: [],
     },
     ignoredChannels: [],

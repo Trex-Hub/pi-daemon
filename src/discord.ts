@@ -223,7 +223,8 @@ export class DiscordTransport {
       isGroupChat,
       wasMentioned,
       "discord",
-      sendToChat
+      sendToChat,
+      message.guildId ?? undefined
     );
     if (!isAuthorized) return;
 
