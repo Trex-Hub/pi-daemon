@@ -56,7 +56,14 @@ export function defaultState(): GatewayState {
 export async function loadState(path: string = DEFAULT_STATE_PATH): Promise<GatewayState> {
   try {
     const raw = await readFile(path, "utf8");
-    return JSON.parse(raw) as GatewayState;
+    const parsed = JSON.parse(raw) as Partial<GatewayState>;
+    const defaults = defaultState();
+    return {
+      config: { ...defaults.config, ...parsed.config },
+      routing: parsed.routing ?? defaults.routing,
+      auth: { ...defaults.auth, ...parsed.auth },
+      ignoredChannels: parsed.ignoredChannels ?? defaults.ignoredChannels,
+    };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       return defaultState();
