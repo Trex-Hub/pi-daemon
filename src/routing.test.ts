@@ -7,6 +7,7 @@ const config: GatewayConfig = {
   discordToken: "t",
   adminUserId: "a",
   projectsRoot: "/root/projects",
+  notifyOnCrash: true,
 };
 
 describe("resolveChannelDirectory", () => {

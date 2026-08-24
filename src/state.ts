@@ -15,6 +15,7 @@ export interface GatewayConfig {
   discordToken: string;
   adminUserId: string;
   projectsRoot: string;
+  notifyOnCrash: boolean;
 }
 
 export interface AuthState {
@@ -36,6 +37,7 @@ export function defaultState(): GatewayState {
       discordToken: "",
       adminUserId: "",
       projectsRoot: join(homedir(), ".pi", "agent", "gateway", "projects"),
+      notifyOnCrash: true,
     },
     routing: {},
     auth: {
