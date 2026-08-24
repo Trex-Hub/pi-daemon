@@ -17,8 +17,30 @@ const defaultSpawn: SpawnFn = (dir) => spawn("pi", ["--mode", "rpc"], { cwd: dir
 export interface SessionManagerOptions {
   notifyCrash: boolean;
   onCrash?: (channelId: string) => void;
+  /** Fired for each parsed NDJSON event a session's `pi --mode rpc` process writes to stdout. */
+  onEvent?: (channelId: string, event: unknown) => void;
   spawnFn?: SpawnFn;
   idleTimeoutMs?: number;
+}
+
+/** Reads NDJSON lines off `pi --mode rpc`'s stdout and forwards parsed events. */
+function attachEventReader(proc: ChildProcess, onEvent: (event: unknown) => void): void {
+  let buffer = "";
+  proc.stdout?.on("data", (chunk: Buffer) => {
+    buffer += chunk.toString("utf8");
+    while (true) {
+      const newlineIdx = buffer.indexOf("\n");
+      if (newlineIdx === -1) break;
+      const line = buffer.slice(0, newlineIdx);
+      buffer = buffer.slice(newlineIdx + 1);
+      if (!line.trim()) continue;
+      try {
+        onEvent(JSON.parse(line));
+      } catch (err) {
+        console.error("[session] failed to parse pi event:", err);
+      }
+    }
+  });
 }
 
 /** Per-channel `pi --mode rpc` process registry: one persistent session per resolved directory (005). */
@@ -47,6 +69,14 @@ export class SessionManager {
     if (session) session.lastActivity = Date.now();
   }
 
+  /** Writes a `prompt` command to the session's `pi --mode rpc` stdin. No-op if the channel has no live session. */
+  sendPrompt(channelId: string, message: string): void {
+    const session = this.sessions.get(channelId);
+    if (!session) return;
+    session.lastActivity = Date.now();
+    session.process.stdin?.write(`${JSON.stringify({ type: "prompt", message })}\n`);
+  }
+
   /** Kills and drops any session idle past the timeout. Call on an interval. */
   reapIdle(now: number = Date.now()): void {
     for (const [channelId, session] of this.sessions) {
@@ -67,6 +97,10 @@ export class SessionManager {
       lastActivity: Date.now(),
     };
     this.sessions.set(channelId, session);
+
+    if (this.opts.onEvent) {
+      attachEventReader(proc, (event) => this.opts.onEvent?.(channelId, event));
+    }
 
     proc.once("exit", (code, signal) => {
       if (this.sessions.get(channelId) !== session) return;

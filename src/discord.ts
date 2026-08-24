@@ -27,6 +27,11 @@ export interface IncomingMessage {
 
 const VOICE_CHANNEL_TYPES: ReadonlySet<ChannelType> = new Set([ChannelType.GuildVoice, ChannelType.GuildStageVoice]);
 
+/** A sent placeholder message, editable in place for streamed updates. */
+export interface PlaceholderHandle {
+  edit(text: string): Promise<void>;
+}
+
 export class DiscordTransport {
   private client: Client | null = null;
   private botUserId = "";
@@ -86,6 +91,34 @@ export class DiscordTransport {
     for (const chunk of chunkMessage(text, DISCORD_MESSAGE_LIMIT)) {
       await channel.send(chunk);
     }
+  }
+
+  /** Sends a placeholder message to edit in place while text streams in. */
+  async sendPlaceholder(chatId: string): Promise<PlaceholderHandle> {
+    if (!this.client) throw new Error("Discord not connected");
+
+    const channel = await this.client.channels.fetch(chatId);
+    if (!channel?.isTextBased() || !("send" in channel)) throw new Error(`Cannot send to channel ${chatId}`);
+
+    const message = await channel.send("…");
+    return {
+      edit: async (text: string) => {
+        await message.edit(chunkMessage(text, DISCORD_MESSAGE_LIMIT)[0] ?? "…");
+      },
+    };
+  }
+
+  /** Creates a thread off `chatId` for tool/bash output. Returns null where threads aren't supported (DMs, voice). */
+  async createThread(chatId: string, name: string): Promise<string | null> {
+    if (!this.client) throw new Error("Discord not connected");
+
+    const channel = await this.client.channels.fetch(chatId);
+    if (!channel || (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildAnnouncement)) {
+      return null;
+    }
+
+    const thread = await channel.threads.create({ name });
+    return thread.id;
   }
 
   private async handleMessage(message: Message): Promise<void> {
