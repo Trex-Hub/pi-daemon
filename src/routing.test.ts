@@ -30,7 +30,7 @@ describe("candidateDirectory", () => {
 
 describe("lookupChannelDirectory + mapChannel", () => {
   it("is unmapped until mapChannel persists it", async () => {
-    const root = await mkdtemp(join(tmpdir(), "pi-gateway-test-"));
+    const root = await mkdtemp(join(tmpdir(), "pi-daemon-test-"));
     const liveConfig: GatewayConfig = { ...config, projectsRoot: root };
     const routing: Record<string, RoutingEntry> = {};
 

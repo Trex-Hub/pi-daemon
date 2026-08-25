@@ -1,11 +1,11 @@
 {
-  "name": "pi-gateway",
+  "name": "pi-daemon",
   "version": "0.1.0",
   "description": "Discord-to-Pi-coding-agent bridge daemon",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "pi-gateway": "dist/src/cli.js"
+    "pi-daemon": "dist/src/cli.js"
   },
   "scripts": {
     "build": "tsc",

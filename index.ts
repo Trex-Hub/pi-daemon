@@ -75,7 +75,7 @@ transport.onMessage((message) => {
 
   if (state.ignoredChannels.includes(message.chatId)) return;
 
-  mkdtemp(join(tmpdir(), "pi-gateway-"))
+  mkdtemp(join(tmpdir(), "pi-daemon-"))
     .then((ephemeralDir) => {
       sessions.getOrCreate(message.chatId, ephemeralDir);
       sessions.sendPrompt(message.chatId, message.content);
@@ -109,4 +109,4 @@ transport.onButtonAction((action) => {
 });
 
 await transport.connect();
-console.log("pi-gateway: connected");
+console.log("pi-daemon: connected");
