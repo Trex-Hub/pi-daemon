@@ -1,6 +1,16 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { userInfo } from "node:os";
 import { dirname, join } from "node:path";
+
+/** True OS home dir, read from the system user database — ignores $HOME so an overwritten/doubled HOME env can't move state.json. */
+function trueHomedir(): string {
+  return userInfo().homedir;
+}
+
+/** Base dir for gateway working data (projects root, etc). Overridable via GATEWAY_HOME; falls back to the true home dir. Never affects where state.json lives. */
+function gatewayHome(): string {
+  return process.env.GATEWAY_HOME || trueHomedir();
+}
 
 export type ChannelAuthMode = "all" | "mentions" | "trusted-only";
 
@@ -33,14 +43,14 @@ export interface GatewayState {
   ignoredChannels: string[];
 }
 
-export const DEFAULT_STATE_PATH = join(homedir(), ".pi", "agent", "gateway", "state.json");
+export const DEFAULT_STATE_PATH = join(trueHomedir(), ".pi", "gateway", "state.json");
 
 export function defaultState(): GatewayState {
   return {
     config: {
       discordToken: "",
       adminUserId: "",
-      projectsRoot: join(homedir(), ".pi", "agent", "gateway", "projects"),
+      projectsRoot: join(gatewayHome(), ".pi", "gateway", "projects"),
       notifyOnCrash: true,
     },
     routing: {},
