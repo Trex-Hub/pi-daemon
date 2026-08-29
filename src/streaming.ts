@@ -1,12 +1,14 @@
 import type { DiscordTransport, PlaceholderHandle, ToolCardHandle } from "./discord.js";
 
 const EDIT_INTERVAL_MS = 1000;
+const TYPING_REFRESH_MS = 8000;
 
 interface TurnState {
   text: string;
   dirty: boolean;
   placeholder: PlaceholderHandle;
   timer?: NodeJS.Timeout;
+  lastTypingAt: number;
   toolCalls: Map<string, { startedAt: number; args: string; handlePromise: Promise<ToolCardHandle> }>;
 }
 
@@ -66,11 +68,19 @@ export class StreamRouter {
 
   private async createTurn(channelId: string): Promise<TurnState> {
     const placeholder = await this.transport.sendPlaceholder(channelId);
-    const state: TurnState = { text: "", dirty: false, placeholder, toolCalls: new Map() };
+    const state: TurnState = { text: "", dirty: false, placeholder, toolCalls: new Map(), lastTypingAt: 0 };
+    this.refreshTyping(channelId, state);
     state.timer = setInterval(() => {
       this.flush(state).catch((err) => console.error("[streaming] edit failed:", err));
+      this.refreshTyping(channelId, state);
     }, EDIT_INTERVAL_MS);
     return state;
+  }
+
+  private refreshTyping(channelId: string, turn: TurnState): void {
+    if (Date.now() - turn.lastTypingAt < TYPING_REFRESH_MS) return;
+    turn.lastTypingAt = Date.now();
+    this.transport.sendTyping(channelId).catch((err) => console.error("[streaming] typing indicator failed:", err));
   }
 
   private async flush(turn: TurnState): Promise<void> {

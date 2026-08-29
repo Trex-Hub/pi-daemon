@@ -168,6 +168,14 @@ export class DiscordTransport {
     };
   }
 
+  /** Fires Discord's typing indicator in `chatId`. Fades after ~10s — caller must refresh. */
+  async sendTyping(chatId: string): Promise<void> {
+    if (!this.client) return;
+    const channel = await this.client.channels.fetch(chatId);
+    if (!channel?.isTextBased() || !("sendTyping" in channel)) return;
+    await channel.sendTyping();
+  }
+
   /** Posts a tool call as a Components V2 status card directly in `chatId` — no thread. Returns a handle to edit it in place when the call finishes. */
   async sendToolCard(chatId: string, card: ToolCard): Promise<ToolCardHandle> {
     if (!this.client) throw new Error("Discord not connected");
