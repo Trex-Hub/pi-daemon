@@ -1,11 +1,21 @@
 {
-  "name": "pi-daemon",
+  "name": "agent-daemon",
   "version": "0.1.0",
   "description": "Discord-to-Pi-coding-agent bridge daemon",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "pi-daemon": "dist/src/cli.js"
+    "agent-daemon": "dist/src/cli.js"
+  },
+  "files": [
+    "dist/index.js",
+    "dist/index.d.ts",
+    "dist/src",
+    "!dist/src/*.test.*"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Trex-Hub/pi-daemon.git"
   },
   "scripts": {
     "build": "tsc",
@@ -16,7 +26,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check *.ts src",
     "lint:fix": "biome check --fix *.ts src",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm run clean && npm run typecheck && npm test && npm run build"
   },
   "license": "MIT",
   "engines": {

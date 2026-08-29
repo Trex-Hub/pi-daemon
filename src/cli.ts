@@ -5,7 +5,7 @@ import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { defaultState, loadState, saveState } from "./state.js";
 
-const PM2_NAME = "pi-daemon";
+const PM2_NAME = "agent-daemon";
 
 function daemonScript(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "..", "index.js");
@@ -47,7 +47,7 @@ async function main(): Promise<void> {
   const command = process.argv[2];
 
   if (!command || !COMMANDS.has(command)) {
-    console.log("usage: pi-daemon <start|stop|restart|status|logs|install>");
+    console.log("usage: agent-daemon <start|stop|restart|status|logs|install>");
     process.exitCode = command ? 1 : 0;
     return;
   }
