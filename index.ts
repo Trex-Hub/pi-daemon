@@ -8,6 +8,16 @@ import { SessionManager } from "./src/session.js";
 import { loadState, saveState } from "./src/state.js";
 import { StreamRouter } from "./src/streaming.js";
 
+process.on("uncaughtException", (err) => {
+  console.error("[fatal] uncaught exception:", err);
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[fatal] unhandled rejection:", reason);
+  process.exit(1);
+});
+
 const state = await loadState();
 
 const transport: DiscordTransport = new DiscordTransport(

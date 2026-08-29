@@ -60,7 +60,7 @@ async function main(): Promise<void> {
   const pm2Args: Record<string, string[]> = {
     start: ["start", daemonScript(), "--name", PM2_NAME],
     stop: ["stop", PM2_NAME],
-    restart: ["restart", PM2_NAME],
+    restart: ["restart", PM2_NAME, "--update-env"],
     status: ["describe", PM2_NAME],
     logs: ["logs", PM2_NAME],
   };
