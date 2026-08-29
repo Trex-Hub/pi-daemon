@@ -43,14 +43,14 @@ export interface GatewayState {
   ignoredChannels: string[];
 }
 
-export const DEFAULT_STATE_PATH = join(trueHomedir(), ".pi", "gateway", "state.json");
+export const DEFAULT_STATE_PATH = join(trueHomedir(), ".pi", "agent", "gateway", "state.json");
 
 export function defaultState(): GatewayState {
   return {
     config: {
       discordToken: "",
       adminUserId: "",
-      projectsRoot: join(gatewayHome(), ".pi", "gateway", "projects"),
+      projectsRoot: join(gatewayHome(), ".pi", "agent", "gateway", "projects"),
       notifyOnCrash: true,
     },
     routing: {},
