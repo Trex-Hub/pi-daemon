@@ -4,11 +4,15 @@ import {
   ButtonStyle,
   ChannelType,
   Client,
+  ContainerBuilder,
   Events,
   GatewayIntentBits,
   type Interaction,
   type Message,
+  MessageFlags,
   Partials,
+  SeparatorBuilder,
+  TextDisplayBuilder,
 } from "discord.js";
 import type { GatewayAuth } from "./auth.js";
 
@@ -34,6 +38,38 @@ const VOICE_CHANNEL_TYPES: ReadonlySet<ChannelType> = new Set([ChannelType.Guild
 /** A sent placeholder message, editable in place for streamed updates. */
 export interface PlaceholderHandle {
   edit(text: string): Promise<void>;
+}
+
+/** A tool call rendered as a Components V2 status card. */
+export interface ToolCard {
+  toolName: string;
+  status: "running" | "success" | "error";
+  args: string;
+  result?: string;
+  duration?: number;
+}
+
+/** A sent tool card, editable in place when the call finishes. */
+export interface ToolCardHandle {
+  edit(card: ToolCard): Promise<void>;
+}
+
+function buildToolCardContainer(card: ToolCard): ContainerBuilder {
+  const statusLabel = card.status === "running" ? "⏳ running" : card.status === "error" ? "🔴 error" : "🟢 done";
+  const header = card.duration != null ? `**${card.toolName}** · ${statusLabel} · ${card.duration}ms` : `**${card.toolName}** · ${statusLabel}`;
+
+  const container = new ContainerBuilder()
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(header))
+    .addSeparatorComponents(new SeparatorBuilder())
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`\`\`\`\n${card.args}\n\`\`\``));
+
+  if (card.result != null) {
+    container
+      .addSeparatorComponents(new SeparatorBuilder())
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent(`\`\`\`\n${card.result}\n\`\`\``));
+  }
+
+  return container;
 }
 
 /** A click on one of the new-channel confirm buttons (008). */
@@ -132,17 +168,19 @@ export class DiscordTransport {
     };
   }
 
-  /** Creates a thread off `chatId` for tool/bash output. Returns null where threads aren't supported (DMs, voice). */
-  async createThread(chatId: string, name: string): Promise<string | null> {
+  /** Posts a tool call as a Components V2 status card directly in `chatId` — no thread. Returns a handle to edit it in place when the call finishes. */
+  async sendToolCard(chatId: string, card: ToolCard): Promise<ToolCardHandle> {
     if (!this.client) throw new Error("Discord not connected");
 
     const channel = await this.client.channels.fetch(chatId);
-    if (!channel || (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildAnnouncement)) {
-      return null;
-    }
+    if (!channel?.isTextBased() || !("send" in channel)) throw new Error(`Cannot send to channel ${chatId}`);
 
-    const thread = await channel.threads.create({ name });
-    return thread.id;
+    const message = await channel.send({ components: [buildToolCardContainer(card)], flags: MessageFlags.IsComponentsV2 });
+    return {
+      edit: async (updated: ToolCard) => {
+        await message.edit({ components: [buildToolCardContainer(updated)], flags: MessageFlags.IsComponentsV2 });
+      },
+    };
   }
 
   /** Posts the new/unmapped-channel confirm prompt with create/attach/ignore buttons (008). */
