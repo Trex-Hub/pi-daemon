@@ -57,6 +57,15 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "start") {
+    const state = await loadState().catch(() => defaultState());
+    if (!state.config.discordToken) {
+      console.log("No Discord bot token configured yet. Run `agent-daemon install` first.");
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   const pm2Args: Record<string, string[]> = {
     start: ["start", daemonScript(), "--name", PM2_NAME],
     stop: ["stop", PM2_NAME],
