@@ -2,6 +2,8 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GatewayAuth } from "./src/auth.js";
+import { CronScheduler } from "./src/cron.js";
+import { loadCronJobs } from "./src/cron-config.js";
 import { DiscordTransport } from "./src/discord.js";
 import { lookupChannelDirectory, mapChannel } from "./src/routing.js";
 import { SessionManager } from "./src/session.js";
@@ -120,3 +122,18 @@ transport.onButtonAction((action) => {
 
 await transport.connect();
 console.log("agent-daemon: connected");
+
+// Cron core (src/cron.ts) knows nothing about Discord — this is the one place `deliverTo`
+// gets interpreted. Started only after connect() resolves, since sendMessage throws on a cold client.
+const cronJobs = await loadCronJobs();
+const cron = new CronScheduler({
+  jobs: cronJobs,
+  onJobResult: (result) => {
+    const channelId = result.deliverTo?.startsWith("discord:") ? result.deliverTo.slice("discord:".length) : null;
+    if (!channelId) return;
+    const body = result.ok ? result.output : `cron job \`${result.id}\` failed:\n${result.output}`;
+    transport.sendMessage(channelId, body).catch((err) => console.error("[cron] delivery failed:", err));
+  },
+});
+cron.start();
+console.log(`agent-daemon: ${cronJobs.length} cron job(s) scheduled`);
