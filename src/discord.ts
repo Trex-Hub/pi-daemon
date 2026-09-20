@@ -35,41 +35,30 @@ export interface IncomingMessage {
 
 const VOICE_CHANNEL_TYPES: ReadonlySet<ChannelType> = new Set([ChannelType.GuildVoice, ChannelType.GuildStageVoice]);
 
-/** A sent placeholder message, editable in place for streamed updates. */
-export interface PlaceholderHandle {
-  edit(text: string): Promise<void>;
+/** Live status shown on the one persistent anchor message for a turn. */
+export interface AnchorState {
+  status: "running" | "done" | "error";
+  toolCallCount: number;
+  /** Most recent tool-call summary, or — once the model starts producing text — the streamed/final assistant text. */
+  currentStep: string;
 }
 
-/** A tool call rendered as a Components V2 status card. */
-export interface ToolCard {
-  toolName: string;
-  status: "running" | "success" | "error";
-  args: string;
-  result?: string;
-  duration?: number;
+/** The turn's one persistent status message. `messageId` anchors a lazily-created thread to it. */
+export interface AnchorHandle {
+  readonly messageId: string;
+  edit(state: AnchorState): Promise<void>;
 }
 
-/** A sent tool card, editable in place when the call finishes. */
-export interface ToolCardHandle {
-  edit(card: ToolCard): Promise<void>;
-}
+function buildAnchorContainer(state: AnchorState): ContainerBuilder {
+  const statusLabel = state.status === "running" ? "⏳ running" : state.status === "error" ? "🔴 error" : "🟢 done";
+  const countLabel = `${state.toolCallCount} tool call${state.toolCallCount === 1 ? "" : "s"}${state.status === "running" ? " so far" : ""}`;
+  const header = `${statusLabel} · ${countLabel}`;
+  const body = chunkMessage(state.currentStep || "…", DISCORD_MESSAGE_LIMIT)[0] ?? "…";
 
-function buildToolCardContainer(card: ToolCard): ContainerBuilder {
-  const statusLabel = card.status === "running" ? "⏳ running" : card.status === "error" ? "🔴 error" : "🟢 done";
-  const header = card.duration != null ? `**${card.toolName}** · ${statusLabel} · ${card.duration}ms` : `**${card.toolName}** · ${statusLabel}`;
-
-  const container = new ContainerBuilder()
+  return new ContainerBuilder()
     .addTextDisplayComponents(new TextDisplayBuilder().setContent(header))
     .addSeparatorComponents(new SeparatorBuilder())
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`\`\`\`\n${card.args}\n\`\`\``));
-
-  if (card.result != null) {
-    container
-      .addSeparatorComponents(new SeparatorBuilder())
-      .addTextDisplayComponents(new TextDisplayBuilder().setContent(`\`\`\`\n${card.result}\n\`\`\``));
-  }
-
-  return container;
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(body));
 }
 
 /** A click on one of the new-channel confirm buttons (008). */
@@ -153,21 +142,6 @@ export class DiscordTransport {
     }
   }
 
-  /** Sends a placeholder message to edit in place while text streams in. */
-  async sendPlaceholder(chatId: string): Promise<PlaceholderHandle> {
-    if (!this.client) throw new Error("Discord not connected");
-
-    const channel = await this.client.channels.fetch(chatId);
-    if (!channel?.isTextBased() || !("send" in channel)) throw new Error(`Cannot send to channel ${chatId}`);
-
-    const message = await channel.send("…");
-    return {
-      edit: async (text: string) => {
-        await message.edit(chunkMessage(text, DISCORD_MESSAGE_LIMIT)[0] ?? "…");
-      },
-    };
-  }
-
   /** Fires Discord's typing indicator in `chatId`. Fades after ~10s — caller must refresh. */
   async sendTyping(chatId: string): Promise<void> {
     if (!this.client) return;
@@ -176,19 +150,65 @@ export class DiscordTransport {
     await channel.sendTyping();
   }
 
-  /** Posts a tool call as a Components V2 status card directly in `chatId` — no thread. Returns a handle to edit it in place when the call finishes. */
-  async sendToolCard(chatId: string, card: ToolCard): Promise<ToolCardHandle> {
+  /** Sends the one persistent per-turn status message — edited in place as tool calls/text stream in. */
+  async sendAnchor(chatId: string): Promise<AnchorHandle> {
     if (!this.client) throw new Error("Discord not connected");
 
     const channel = await this.client.channels.fetch(chatId);
     if (!channel?.isTextBased() || !("send" in channel)) throw new Error(`Cannot send to channel ${chatId}`);
 
-    const message = await channel.send({ components: [buildToolCardContainer(card)], flags: MessageFlags.IsComponentsV2 });
+    const initial: AnchorState = { status: "running", toolCallCount: 0, currentStep: "" };
+    const message = await channel.send({
+      components: [buildAnchorContainer(initial)],
+      flags: MessageFlags.IsComponentsV2,
+      allowedMentions: { parse: [] },
+    });
     return {
-      edit: async (updated: ToolCard) => {
-        await message.edit({ components: [buildToolCardContainer(updated)], flags: MessageFlags.IsComponentsV2 });
+      messageId: message.id,
+      edit: async (state: AnchorState) => {
+        await message.edit({
+          components: [buildAnchorContainer(state)],
+          flags: MessageFlags.IsComponentsV2,
+          allowedMentions: { parse: [] },
+        });
       },
     };
+  }
+
+  /** Starts a thread attached to the anchor message so it's visible as "N replies" — never orphaned. Returns null for channels that can't have threads (DMs, voice). */
+  async createToolThread(chatId: string, anchorMessageId: string, name: string): Promise<string | null> {
+    if (!this.client) throw new Error("Discord not connected");
+
+    const channel = await this.client.channels.fetch(chatId);
+    if (channel?.type !== ChannelType.GuildText && channel?.type !== ChannelType.GuildAnnouncement) return null;
+
+    const truncated = name.length > 100 ? `${name.slice(0, 99)}…` : name;
+    try {
+      const thread = await channel.threads.create({
+        name: truncated,
+        startMessage: anchorMessageId,
+        autoArchiveDuration: 1440,
+      });
+      return thread.id;
+    } catch (err) {
+      console.error("[discord] thread creation failed:", err);
+      return null;
+    }
+  }
+
+  /** Posts one batched, human-readable message of tool-call lines into a thread — never one message per call, never raw JSON. */
+  async postThreadBatch(threadId: string, lines: string[]): Promise<void> {
+    if (!this.client) throw new Error("Discord not connected");
+    if (lines.length === 0) return;
+
+    const channel = await this.client.channels.fetch(threadId);
+    if (!channel?.isTextBased() || !("send" in channel)) throw new Error(`Cannot send to thread ${threadId}`);
+
+    const fenceOverhead = 8; // "```\n" + "\n```"
+    const raw = lines.join("\n");
+    for (const chunk of chunkMessage(raw, DISCORD_MESSAGE_LIMIT - fenceOverhead)) {
+      await channel.send({ content: `\`\`\`\n${chunk}\n\`\`\``, allowedMentions: { parse: [] } });
+    }
   }
 
   /** Posts the new/unmapped-channel confirm prompt with create/attach/ignore buttons (008). */

@@ -81,6 +81,7 @@ transport.onMessage((message) => {
   const dir = lookupChannelDirectory(state.routing, message.chatId);
   if (dir) {
     sessions.getOrCreate(message.chatId, dir);
+    streaming.beginTurn(message.chatId, message.content);
     sessions.sendPrompt(message.chatId, message.content);
     return;
   }
@@ -90,6 +91,7 @@ transport.onMessage((message) => {
   mkdtemp(join(tmpdir(), "agent-daemon-"))
     .then((ephemeralDir) => {
       sessions.getOrCreate(message.chatId, ephemeralDir);
+      streaming.beginTurn(message.chatId, message.content);
       sessions.sendPrompt(message.chatId, message.content);
     })
     .catch((err) => console.error("[session] ephemeral spawn failed:", err));
