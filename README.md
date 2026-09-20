@@ -58,7 +58,7 @@ This creates (or attaches to) a folder at `<projects-root>/<category>/<channel-n
 
 ## Configuration file
 
-Settings are stored in `~/.pi/agent/gateway/state.json`. This includes the Discord token, the admin user ID, the project root path, channel-to-folder routing, and access rules. You normally do not need to edit this file directly. The install wizard and the `/pi map` command manage it for you.
+Settings are stored in `~/.pi/agent/gateway/state.json`. This includes the Discord token, the admin user ID, the project root path, channel-to-folder routing, and access rules. `config.allowedChannels` restricts which channel ids the bot will respond in — defaults to `["*"]` (all channels). You normally do not need to edit this file directly. The install wizard and the `/pi map` command manage it for you.
 
 ## Running at startup on your machine
 

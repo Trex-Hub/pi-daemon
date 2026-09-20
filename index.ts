@@ -7,7 +7,7 @@ import { loadCronJobs } from "./src/cron-config.js";
 import { DiscordTransport } from "./src/discord.js";
 import { lookupChannelDirectory, mapChannel } from "./src/routing.js";
 import { SessionManager } from "./src/session.js";
-import { loadState, saveState } from "./src/state.js";
+import { loadState, migrateState, saveState } from "./src/state.js";
 import { StreamRouter } from "./src/streaming.js";
 
 process.on("uncaughtException", (err) => {
@@ -20,6 +20,7 @@ process.on("unhandledRejection", (reason) => {
   process.exit(1);
 });
 
+await migrateState();
 const state = await loadState();
 
 const transport: DiscordTransport = new DiscordTransport(
@@ -71,6 +72,9 @@ function persistMapping(channelId: string, category: string, channelName: string
 }
 
 transport.onMessage((message) => {
+  const { allowedChannels } = state.config;
+  if (!allowedChannels.includes("*") && !allowedChannels.includes(message.chatId)) return;
+
   const mapMatch = message.content.match(MAP_COMMAND);
   if (mapMatch) {
     const [, category, channelName] = mapMatch;

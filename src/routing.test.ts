@@ -10,6 +10,7 @@ const config: GatewayConfig = {
   adminUserId: "a",
   projectsRoot: "/root/projects",
   notifyOnCrash: true,
+  allowedChannels: ["*"],
 };
 
 describe("candidateDirectory", () => {

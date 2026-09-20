@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
@@ -9,6 +10,11 @@ const PM2_NAME = "agent-daemon";
 
 function daemonScript(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "..", "index.js");
+}
+
+function packageVersion(): string {
+  const pkgPath = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json");
+  return JSON.parse(readFileSync(pkgPath, "utf8")).version as string;
 }
 
 function pm2(args: string[]): number {
@@ -41,19 +47,39 @@ async function promptInstall(): Promise<void> {
   pm2(["start", daemonScript(), "--name", PM2_NAME]);
 }
 
-const COMMANDS = new Set(["start", "stop", "restart", "status", "logs", "install"]);
+async function runUpdate(): Promise<void> {
+  const oldVersion = packageVersion();
+  const result = spawnSync("npm", ["install", "-g", "agent-daemon@latest"], { stdio: "inherit" });
+  if (result.error) {
+    console.error(`npm not found (${result.error.message})`);
+    process.exitCode = 1;
+    return;
+  }
+  if ((result.status ?? 1) !== 0) {
+    process.exitCode = result.status ?? 1;
+    return;
+  }
+  console.log(`updated: ${oldVersion} → ${packageVersion()}`);
+}
+
+const COMMANDS = new Set(["start", "stop", "restart", "status", "logs", "install", "update"]);
 
 async function main(): Promise<void> {
   const command = process.argv[2];
 
   if (!command || !COMMANDS.has(command)) {
-    console.log("usage: agent-daemon <start|stop|restart|status|logs|install>");
+    console.log("usage: agent-daemon <start|stop|restart|status|logs|install|update>");
     process.exitCode = command ? 1 : 0;
     return;
   }
 
   if (command === "install") {
     await promptInstall();
+    return;
+  }
+
+  if (command === "update") {
+    await runUpdate();
     return;
   }
 

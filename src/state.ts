@@ -26,6 +26,8 @@ export interface GatewayConfig {
   adminUserId: string;
   projectsRoot: string;
   notifyOnCrash: boolean;
+  /** Channel ids allowed to trigger a session. `"*"` allows every channel. */
+  allowedChannels: string[];
 }
 
 export interface AuthState {
@@ -52,6 +54,7 @@ export function defaultState(): GatewayState {
       adminUserId: "",
       projectsRoot: join(gatewayHome(), ".pi", "agent", "gateway", "projects"),
       notifyOnCrash: true,
+      allowedChannels: ["*"],
     },
     routing: {},
     auth: {
@@ -79,6 +82,26 @@ export async function loadState(path: string = DEFAULT_STATE_PATH): Promise<Gate
       return defaultState();
     }
     throw err;
+  }
+}
+
+/**
+ * Rewrites state.json in place if it predates fields a newer version defaults in, so the file
+ * on disk stops lying about the effective config. Call once at boot, before loadState().
+ * No-op if the file doesn't exist yet (nothing to migrate) or already matches current defaults.
+ */
+export async function migrateState(path: string = DEFAULT_STATE_PATH): Promise<void> {
+  let raw: string;
+  try {
+    raw = await readFile(path, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw err;
+  }
+  const parsed = JSON.parse(raw) as Partial<GatewayState>;
+  const merged = await loadState(path);
+  if (JSON.stringify(parsed) !== JSON.stringify(merged)) {
+    await saveState(merged, path);
   }
 }
 

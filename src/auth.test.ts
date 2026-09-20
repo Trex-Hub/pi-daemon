@@ -4,7 +4,7 @@ import type { GatewayState } from "./state.js";
 
 function makeState(overrides?: Partial<GatewayState["auth"]>): GatewayState {
   return {
-    config: { discordToken: "t", adminUserId: "admin1", projectsRoot: "/root", notifyOnCrash: true },
+    config: { discordToken: "t", adminUserId: "admin1", projectsRoot: "/root", notifyOnCrash: true, allowedChannels: ["*"] },
     routing: {},
     auth: { channelModes: {}, guildModes: {}, trustedUsers: [], ...overrides },
     ignoredChannels: [],
