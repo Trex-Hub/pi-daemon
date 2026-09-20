@@ -57,7 +57,7 @@ const pendingConfirm = new Set<string>();
 
 const MAP_COMMAND = /^\/pi map (\S+)\/(\S+)$/i;
 
-function persistMapping(channelId: string, category: string, channelName: string, reply: (text: string) => Promise<void>) {
+const persistMapping = (channelId: string, category: string, channelName: string, reply: (text: string) => Promise<void>) => {
   mapChannel(state.config, state.routing, channelId, category, channelName)
     .then((dir) => {
       sessions.drop(channelId);
@@ -69,7 +69,7 @@ function persistMapping(channelId: string, category: string, channelName: string
       console.error("[routing] mapping failed:", err);
       reply(`Failed to map: ${(err as Error).message}`).catch(() => {});
     });
-}
+};
 
 transport.onMessage((message) => {
   const { allowedChannels } = state.config;

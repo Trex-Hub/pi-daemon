@@ -5,13 +5,11 @@ import { Cron } from "croner";
 
 /** True OS home dir — same rationale as state.ts: ignores $HOME so it can't move cron-jobs.json. Copied rather than
  * imported from state.ts to keep this module free of gateway-state imports. */
-function trueHomedir(): string {
-  return userInfo().homedir;
-}
+const trueHomedir = (): string => userInfo().homedir;
 
 export const DEFAULT_CRON_PATH = join(trueHomedir(), ".pi", "agent", "gateway", "cron-jobs.json");
 
-export interface JobSpec {
+export type JobSpec = {
   id: string;
   /** Standard 5/6-field cron expression, e.g. "0 9 * * 1-5". */
   cron: string;
@@ -22,18 +20,16 @@ export interface JobSpec {
   tools?: string[];
   /** Opaque to the cron core — interpreted only by the adapter that reads onJobResult. */
   deliverTo?: string;
-}
+};
 
-interface RawFile {
+type RawFile = {
   jobs?: unknown;
-}
+};
 
-function isNonEmptyString(v: unknown): v is string {
-  return typeof v === "string" && v.trim().length > 0;
-}
+const isNonEmptyString = (v: unknown): v is string => typeof v === "string" && v.trim().length > 0;
 
 /** Validates one raw job entry, logging and returning null rather than throwing — one bad job must not block boot. */
-function validateJob(raw: unknown, seenIds: Set<string>): JobSpec | null {
+const validateJob = (raw: unknown, seenIds: Set<string>): JobSpec | null => {
   if (typeof raw !== "object" || raw === null) {
     console.error("[cron] skipping job: not an object");
     return null;
@@ -86,10 +82,10 @@ function validateJob(raw: unknown, seenIds: Set<string>): JobSpec | null {
     tools: j.tools as string[] | undefined,
     deliverTo: j.deliverTo as string | undefined,
   };
-}
+};
 
 /** Loads and validates cron job specs. Missing file -> []; any other read/parse error rethrows. */
-export async function loadCronJobs(path: string = DEFAULT_CRON_PATH): Promise<JobSpec[]> {
+export const loadCronJobs = async (path: string = DEFAULT_CRON_PATH): Promise<JobSpec[]> => {
   let raw: string;
   try {
     raw = await readFile(path, "utf8");
@@ -107,4 +103,4 @@ export async function loadCronJobs(path: string = DEFAULT_CRON_PATH): Promise<Jo
     if (job) jobs.push(job);
   }
   return jobs;
-}
+};

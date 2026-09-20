@@ -1,15 +1,16 @@
-import type { AnchorHandle, DiscordTransport } from "./discord.js";
+import type { AnchorHandle } from "./anchor.js";
+import type { DiscordTransport } from "./discord.js";
 
 export const EDIT_INTERVAL_MS = 1000;
 const TYPING_REFRESH_MS = 8000;
 const ARG_VALUE_MAX = 60;
 
-interface PendingCall {
+type PendingCall = {
   toolName: string;
   startedAt: number;
-}
+};
 
-interface TurnState {
+type TurnState = {
   anchor: AnchorHandle;
   status: "running" | "done" | "error";
   hadError: boolean;
@@ -27,15 +28,15 @@ interface TurnState {
   promptPreview: string;
   timer?: NodeJS.Timeout;
   lastTypingAt: number;
-}
+};
 
-function truncateValue(value: unknown, max = ARG_VALUE_MAX): string {
+const truncateValue = (value: unknown, max = ARG_VALUE_MAX): string => {
   const s = typeof value === "string" ? value : JSON.stringify(value);
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
-}
+};
 
 /** Formats a tool call's args as a short human-readable summary — never raw JSON. */
-function summarizeArgs(value: unknown): string {
+const summarizeArgs = (value: unknown): string => {
   if (value == null) return "";
   if (typeof value !== "object") return truncateValue(value);
   const entries = Object.entries(value as Record<string, unknown>);
@@ -45,18 +46,18 @@ function summarizeArgs(value: unknown): string {
     .slice(0, 3)
     .map(([k, v]) => `${k}=${truncateValue(v)}`)
     .join(" ");
-}
+};
 
-function formatToolStart(toolName: string, args: unknown): string {
+const formatToolStart = (toolName: string, args: unknown): string => {
   const summary = summarizeArgs(args);
   return summary ? `▶ ${toolName} ${summary}` : `▶ ${toolName}`;
-}
+};
 
-function formatToolEnd(toolName: string, result: unknown, isError: boolean, durationMs: number): string {
+const formatToolEnd = (toolName: string, result: unknown, isError: boolean, durationMs: number): string => {
   const summary = summarizeArgs(result);
   const icon = isError ? "✗" : "✓";
   return summary ? `${icon} ${toolName} (${durationMs}ms): ${summary}` : `${icon} ${toolName} (${durationMs}ms)`;
-}
+};
 
 /** Routes one channel's streamed Pi RPC events to Discord: one throttled-edit anchor card + a lazily-created thread carrying the readable tool-call log. */
 export class StreamRouter {

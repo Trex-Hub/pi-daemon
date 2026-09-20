@@ -6,19 +6,19 @@ const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000;
 
 export type SpawnFn = (job: JobSpec) => ChildProcess;
 
-export interface JobResult {
+export type JobResult = {
   id: string;
   ok: boolean;
   output: string;
   deliverTo?: string;
-}
+};
 
-export interface CronSchedulerOptions {
+export type CronSchedulerOptions = {
   jobs: JobSpec[];
   onJobResult: (result: JobResult) => void;
   spawnFn?: SpawnFn;
   maxRuntimeMs?: number;
-}
+};
 
 const defaultSpawn: SpawnFn = (job) =>
   // stdin must be "ignore": a one-shot `pi -p` run never writes to it, and leaving it an

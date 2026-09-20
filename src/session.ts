@@ -2,29 +2,29 @@ import { type ChildProcess, spawn } from "node:child_process";
 
 const IDLE_TIMEOUT_MS = 60 * 60 * 1000;
 
-export interface Session {
+export type Session = {
   channelId: string;
   dir: string;
   process: ChildProcess;
   pid: number;
   lastActivity: number;
-}
+};
 
 export type SpawnFn = (dir: string) => ChildProcess;
 
 const defaultSpawn: SpawnFn = (dir) => spawn("pi", ["--mode", "rpc"], { cwd: dir });
 
-export interface SessionManagerOptions {
+export type SessionManagerOptions = {
   notifyCrash: boolean;
   onCrash?: (channelId: string) => void;
   /** Fired for each parsed NDJSON event a session's `pi --mode rpc` process writes to stdout. */
   onEvent?: (channelId: string, event: unknown) => void;
   spawnFn?: SpawnFn;
   idleTimeoutMs?: number;
-}
+};
 
 /** Reads NDJSON lines off `pi --mode rpc`'s stdout and forwards parsed events. */
-function attachEventReader(proc: ChildProcess, onEvent: (event: unknown) => void): void {
+const attachEventReader = (proc: ChildProcess, onEvent: (event: unknown) => void): void => {
   let buffer = "";
   proc.stdout?.on("data", (chunk: Buffer) => {
     buffer += chunk.toString("utf8");
@@ -41,7 +41,7 @@ function attachEventReader(proc: ChildProcess, onEvent: (event: unknown) => void
       }
     }
   });
-}
+};
 
 /** Per-channel `pi --mode rpc` process registry: one persistent session per resolved directory (005). */
 export class SessionManager {

@@ -8,25 +8,23 @@ import { defaultState, loadState, saveState } from "./state.js";
 
 const PM2_NAME = "agent-daemon";
 
-function daemonScript(): string {
-  return join(dirname(fileURLToPath(import.meta.url)), "..", "index.js");
-}
+const daemonScript = (): string => join(dirname(fileURLToPath(import.meta.url)), "..", "index.js");
 
-function packageVersion(): string {
+const packageVersion = (): string => {
   const pkgPath = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json");
   return JSON.parse(readFileSync(pkgPath, "utf8")).version as string;
-}
+};
 
-function pm2(args: string[]): number {
+const pm2 = (args: string[]): number => {
   const result = spawnSync("pm2", args, { stdio: "inherit" });
   if (result.error) {
     console.error(`pm2 not found — install it first: npm install -g pm2 (${result.error.message})`);
     return 1;
   }
   return result.status ?? 1;
-}
+};
 
-async function promptInstall(): Promise<void> {
+const promptInstall = async (): Promise<void> => {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const state = await loadState().catch(() => defaultState());
 
@@ -45,9 +43,9 @@ async function promptInstall(): Promise<void> {
   await saveState(state);
   console.log("state written, starting daemon via pm2");
   pm2(["start", daemonScript(), "--name", PM2_NAME]);
-}
+};
 
-async function runUpdate(): Promise<void> {
+const runUpdate = async (): Promise<void> => {
   const oldVersion = packageVersion();
   const result = spawnSync("npm", ["install", "-g", "agent-daemon@latest"], { stdio: "inherit" });
   if (result.error) {
@@ -60,11 +58,11 @@ async function runUpdate(): Promise<void> {
     return;
   }
   console.log(`updated: ${oldVersion} → ${packageVersion()}`);
-}
+};
 
 const COMMANDS = new Set(["start", "stop", "restart", "status", "logs", "install", "update"]);
 
-async function main(): Promise<void> {
+const main = async (): Promise<void> => {
   const command = process.argv[2];
 
   if (!command || !COMMANDS.has(command)) {
@@ -101,6 +99,6 @@ async function main(): Promise<void> {
   };
 
   process.exitCode = pm2(pm2Args[command]);
-}
+};
 
 main();

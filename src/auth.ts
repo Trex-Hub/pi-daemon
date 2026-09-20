@@ -5,13 +5,13 @@ const CHALLENGE_TTL_MS = 2 * 60 * 1000;
 const BLOCK_DURATION_MS = 5 * 60 * 1000;
 const MAX_ATTEMPTS = 3;
 
-interface ChallengeData {
+type ChallengeData = {
   code: string;
   chatId: string;
   username: string;
   expiresAt: number;
   attempts: number;
-}
+};
 
 export type SendMessage = (chatId: string, text: string) => Promise<void>;
 
@@ -19,6 +19,11 @@ export type SendMessage = (chatId: string, text: string) => Promise<void>;
 // (config.adminUserId), not any trusted user — a trusted-only gate would let
 // any trusted user grant channel-wide/guild-wide access to strangers via /enable.
 const ADMIN_ONLY_COMMANDS = new Set(["/enable", "/disable", "/enable-guild", "/disable-guild", "/revoke"]);
+
+type Scope = "channel" | "guild";
+
+const SCOPE_LABELS: Record<Scope, string> = { channel: "Channel", guild: "Guild" };
+const SCOPE_SUFFIX: Record<Scope, string> = { channel: "", guild: "-guild" };
 
 /** Challenge-code onboarding + 3-tier channel auth against GatewayState. */
 export class GatewayAuth {
@@ -82,6 +87,34 @@ export class GatewayAuth {
       case "trusted-only":
         return this.isTrusted(namespacedUserId);
     }
+  }
+
+  private modesFor(scope: Scope): Record<string, ChannelAuthMode> {
+    return scope === "channel" ? this.state.auth.channelModes : this.state.auth.guildModes;
+  }
+
+  private async enableScope(scope: Scope, parts: string[], sendMessage: (text: string) => Promise<void>): Promise<boolean> {
+    if (parts.length < 3 || !isChannelAuthMode(parts[2])) {
+      await sendMessage(`Usage: /enable${SCOPE_SUFFIX[scope]} <${scope}Id> <all|mentions|trusted-only>`);
+      return true;
+    }
+    this.modesFor(scope)[parts[1]] = parts[2];
+    this.onSaveAuth?.();
+    await sendMessage(`${SCOPE_LABELS[scope]} ${parts[1]} enabled (mode: ${parts[2]})`);
+    this.onNotify(`${SCOPE_LABELS[scope]} ${parts[1]} enabled (${parts[2]})`, "info");
+    return true;
+  }
+
+  private async disableScope(scope: Scope, parts: string[], sendMessage: (text: string) => Promise<void>): Promise<boolean> {
+    if (parts.length < 2) {
+      await sendMessage(`Usage: /disable${SCOPE_SUFFIX[scope]} <${scope}Id>`);
+      return true;
+    }
+    delete this.modesFor(scope)[parts[1]];
+    this.onSaveAuth?.();
+    await sendMessage(`${SCOPE_LABELS[scope]} ${parts[1]} disabled`);
+    this.onNotify(`${SCOPE_LABELS[scope]} ${parts[1]} disabled`, "info");
+    return true;
   }
 
   private async initiateChallenge(
@@ -164,26 +197,10 @@ export class GatewayAuth {
       }
 
       case "/enable":
-        if (parts.length < 3 || !isChannelAuthMode(parts[2])) {
-          await sendMessage("Usage: /enable <channelId> <all|mentions|trusted-only>");
-          return true;
-        }
-        this.state.auth.channelModes[parts[1]] = parts[2];
-        this.onSaveAuth?.();
-        await sendMessage(`Channel ${parts[1]} enabled (mode: ${parts[2]})`);
-        this.onNotify(`Channel ${parts[1]} enabled (${parts[2]})`, "info");
-        return true;
+        return this.enableScope("channel", parts, sendMessage);
 
       case "/disable":
-        if (parts.length < 2) {
-          await sendMessage("Usage: /disable <channelId>");
-          return true;
-        }
-        delete this.state.auth.channelModes[parts[1]];
-        this.onSaveAuth?.();
-        await sendMessage(`Channel ${parts[1]} disabled`);
-        this.onNotify(`Channel ${parts[1]} disabled`, "info");
-        return true;
+        return this.disableScope("channel", parts, sendMessage);
 
       case "/guilds": {
         const entries = Object.entries(this.state.auth.guildModes);
@@ -193,26 +210,10 @@ export class GatewayAuth {
       }
 
       case "/enable-guild":
-        if (parts.length < 3 || !isChannelAuthMode(parts[2])) {
-          await sendMessage("Usage: /enable-guild <guildId> <all|mentions|trusted-only>");
-          return true;
-        }
-        this.state.auth.guildModes[parts[1]] = parts[2];
-        this.onSaveAuth?.();
-        await sendMessage(`Guild ${parts[1]} enabled (mode: ${parts[2]})`);
-        this.onNotify(`Guild ${parts[1]} enabled (${parts[2]})`, "info");
-        return true;
+        return this.enableScope("guild", parts, sendMessage);
 
       case "/disable-guild":
-        if (parts.length < 2) {
-          await sendMessage("Usage: /disable-guild <guildId>");
-          return true;
-        }
-        delete this.state.auth.guildModes[parts[1]];
-        this.onSaveAuth?.();
-        await sendMessage(`Guild ${parts[1]} disabled`);
-        this.onNotify(`Guild ${parts[1]} disabled`, "info");
-        return true;
+        return this.disableScope("guild", parts, sendMessage);
 
       case "/revoke": {
         if (parts.length < 2) {
@@ -299,6 +300,5 @@ export class GatewayAuth {
   }
 }
 
-function isChannelAuthMode(value: string): value is ChannelAuthMode {
-  return value === "all" || value === "mentions" || value === "trusted-only";
-}
+const isChannelAuthMode = (value: string): value is ChannelAuthMode =>
+  value === "all" || value === "mentions" || value === "trusted-only";

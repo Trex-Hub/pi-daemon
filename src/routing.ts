@@ -4,12 +4,12 @@ import type { GatewayConfig, RoutingEntry } from "./state.js";
 
 const UNGROUPED = "ungrouped";
 
-function sanitizeSegment(name: string): string {
+const sanitizeSegment = (name: string): string => {
   const cleaned = name.replace(/[/\\]/g, "-").trim();
   return cleaned || "unnamed";
-}
+};
 
-function resolveUnderRoot(config: GatewayConfig, category: string, channel: string): string {
+const resolveUnderRoot = (config: GatewayConfig, category: string, channel: string): string => {
   const root = resolve(config.projectsRoot);
   const dir = resolve(root, sanitizeSegment(category), sanitizeSegment(channel));
 
@@ -18,28 +18,28 @@ function resolveUnderRoot(config: GatewayConfig, category: string, channel: stri
   }
 
   return dir;
-}
+};
 
 /** Looks up an existing channel→directory mapping. Returns null for an unmapped channel (008). */
-export function lookupChannelDirectory(routing: Record<string, RoutingEntry>, channelId: string): string | null {
+export const lookupChannelDirectory = (routing: Record<string, RoutingEntry>, channelId: string): string | null => {
   return routing[channelId]?.dir ?? null;
-}
+};
 
 /** Computes (without persisting) the directory a channel's auto-derived category/name would map to. */
-export function candidateDirectory(config: GatewayConfig, category: string | null, channelName: string): string {
+export const candidateDirectory = (config: GatewayConfig, category: string | null, channelName: string): string => {
   return resolveUnderRoot(config, category ?? UNGROUPED, channelName);
-}
+};
 
 /** `mkdir -p`s the resolved directory and persists the channel→dir mapping (008 confirm / `/pi map`). */
-export async function mapChannel(
+export const mapChannel = async (
   config: GatewayConfig,
   routing: Record<string, RoutingEntry>,
   channelId: string,
   category: string,
   channel: string
-): Promise<string> {
+): Promise<string> => {
   const dir = resolveUnderRoot(config, category, channel);
   await mkdir(dir, { recursive: true });
   routing[channelId] = { dir };
   return dir;
-}
+};

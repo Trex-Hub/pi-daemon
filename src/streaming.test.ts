@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AnchorHandle, DiscordTransport } from "./discord.js";
+import type { AnchorHandle } from "./anchor.js";
+import type { DiscordTransport } from "./discord.js";
 import { EDIT_INTERVAL_MS, StreamRouter } from "./streaming.js";
 
 function fakeTransport() {
