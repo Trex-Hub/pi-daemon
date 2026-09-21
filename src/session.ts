@@ -1,6 +1,9 @@
 import { type ChildProcess, spawn } from "node:child_process";
 
 const IDLE_TIMEOUT_MS = 60 * 60 * 1000;
+const DISCORD_FILE_PROMPT = "To send one file to Discord, end your response with [[discord-file:relative/path]] on its own line.";
+
+export const buildPiArgs = (): string[] => ["--mode", "rpc", "--append-system-prompt", DISCORD_FILE_PROMPT];
 
 export type Session = {
   channelId: string;
@@ -12,7 +15,7 @@ export type Session = {
 
 export type SpawnFn = (dir: string) => ChildProcess;
 
-const defaultSpawn: SpawnFn = (dir) => spawn("pi", ["--mode", "rpc"], { cwd: dir });
+const defaultSpawn: SpawnFn = (dir) => spawn("pi", buildPiArgs(), { cwd: dir });
 
 export type SessionManagerOptions = {
   notifyCrash: boolean;
@@ -67,6 +70,10 @@ export class SessionManager {
   touch(channelId: string): void {
     const session = this.sessions.get(channelId);
     if (session) session.lastActivity = Date.now();
+  }
+
+  getDirectory(channelId: string): string | null {
+    return this.sessions.get(channelId)?.dir ?? null;
   }
 
   /** Writes a `prompt` command to the session's `pi --mode rpc` stdin. No-op if the channel has no live session. */

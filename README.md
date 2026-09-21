@@ -56,6 +56,12 @@ You can also map a channel manually by sending this in the channel:
 
 This creates (or attaches to) a folder at `<projects-root>/<category>/<channel-name>` and routes all future messages in that channel there.
 
+## Attachments
+
+Attachments work only in mapped channels. The daemon accepts opaque files up to 10 MiB total per message (up to five files), downloads them to `<project>/uploads/`, and tells Pi their paths. Uploads are retained; cleanup is intentionally not implemented yet.
+
+To send one generated file back, Pi ends its response with a line like `[[discord-file:report.pdf]]`. The file must be a regular file under the project, outside dot-directories, and no larger than 10 MiB.
+
 ## Configuration file
 
 Settings are stored in `~/.pi/agent/gateway/state.json`. This includes the Discord token, the admin user ID, the project root path, channel-to-folder routing, and access rules. `config.allowedChannels` restricts which channel ids the bot will respond in — defaults to `["*"]` (all channels). You normally do not need to edit this file directly. The install wizard and the `/pi map` command manage it for you.

@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import { SessionManager } from "./session.js";
+import { buildPiArgs, SessionManager } from "./session.js";
 
 function fakeProc(pid: number) {
   const emitter = new EventEmitter();
@@ -9,6 +9,17 @@ function fakeProc(pid: number) {
     kill: ReturnType<typeof vi.fn>;
   };
 }
+
+describe("buildPiArgs", () => {
+  it("starts RPC mode with the Discord file marker convention appended", () => {
+    expect(buildPiArgs()).toEqual([
+      "--mode",
+      "rpc",
+      "--append-system-prompt",
+      expect.stringContaining("[[discord-file:relative/path]]"),
+    ]);
+  });
+});
 
 describe("SessionManager", () => {
   it("spawns once per channel and reuses it on later gets", () => {

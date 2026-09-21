@@ -10,6 +10,26 @@ type PendingCall = {
   startedAt: number;
 };
 
+export type FileRequestHandler = (channelId: string, path: string) => Promise<void>;
+
+const markerLine = /^\s*\[\[discord-file:/;
+const completeMarker = /^\s*\[\[discord-file:([^\]\r\n]+)\]\]\s*$/;
+
+const visibleText = (text: string): string =>
+  text
+    .split("\n")
+    .filter((line) => !markerLine.test(line))
+    .join("\n");
+
+const requestedFile = (text: string): string | null => {
+  const lines = text.split("\n");
+  const matches = lines.map((line) => line.match(completeMarker)).filter((match) => match !== null);
+  const last = [...lines].reverse().find((line) => line.trim());
+  if (matches.length !== 1 || !last) return null;
+  const match = last.match(completeMarker);
+  return match?.[1]?.trim() || null;
+};
+
 type TurnState = {
   anchor: AnchorHandle;
   status: "running" | "done" | "error";
@@ -64,7 +84,10 @@ export class StreamRouter {
   private turns = new Map<string, Promise<TurnState>>();
   private pendingPrompts = new Map<string, string>();
 
-  constructor(private transport: DiscordTransport) {}
+  constructor(
+    private transport: DiscordTransport,
+    private onFileRequest?: FileRequestHandler
+  ) {}
 
   /** Call right before sending the prompt to `pi`, so the eventual anchor/thread can be named from it. */
   beginTurn(channelId: string, promptPreview: string): void {
@@ -108,9 +131,12 @@ export class StreamRouter {
       turn.threadDirty = true;
     } else if (e.type === "agent_settled") {
       const turn = await this.ensureTurn(channelId);
+      const path = requestedFile(turn.text);
+      turn.text = visibleText(turn.text);
       turn.status = turn.hadError ? "error" : "done";
       turn.dirty = true;
       await this.endTurn(channelId);
+      if (path) await this.onFileRequest?.(channelId, path);
     }
   }
 
@@ -183,7 +209,7 @@ export class StreamRouter {
       await turn.anchor.edit({
         status: turn.status,
         toolCallCount: turn.toolCallCount,
-        currentStep: turn.text || turn.lastToolLine || "…",
+        currentStep: visibleText(turn.text) || turn.lastToolLine || "…",
       });
     }
     if (turn.threadDirty && turn.threadId) {

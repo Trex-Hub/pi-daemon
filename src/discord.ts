@@ -12,7 +12,15 @@ import {
   Partials,
 } from "discord.js";
 import { type AnchorHandle, type AnchorState, buildAnchorContainer, chunkMessage, DISCORD_MESSAGE_LIMIT } from "./anchor.js";
+import type { OutboundFile } from "./attachments.js";
 import type { GatewayAuth } from "./auth.js";
+
+export type IncomingAttachment = {
+  id: string;
+  name: string;
+  size: number;
+  url: string;
+};
 
 /** Incoming Discord message, normalized for routing/session handling downstream (ticket 005+). */
 export type IncomingMessage = {
@@ -27,6 +35,7 @@ export type IncomingMessage = {
   channelName: string;
   messageId: string;
   timestamp: Date;
+  attachments: IncomingAttachment[];
 };
 
 const VOICE_CHANNEL_TYPES: ReadonlySet<ChannelType> = new Set([ChannelType.GuildVoice, ChannelType.GuildStageVoice]);
@@ -118,6 +127,17 @@ export class DiscordTransport {
     const channel = await this.client.channels.fetch(chatId);
     if (!channel?.isTextBased() || !("sendTyping" in channel)) return;
     await channel.sendTyping();
+  }
+
+  async sendFile(chatId: string, file: OutboundFile): Promise<void> {
+    try {
+      if (!this.client) throw new Error("Discord not connected");
+      const channel = await this.client.channels.fetch(chatId);
+      if (!channel?.isTextBased() || !("send" in channel)) throw new Error(`Cannot send to channel ${chatId}`);
+      await channel.send({ files: [{ attachment: file.stream, name: file.filename }], allowedMentions: { parse: [] } });
+    } finally {
+      file.stream.destroy();
+    }
   }
 
   /** Sends the one persistent per-turn status message — edited in place as tool calls/text stream in. */
@@ -231,7 +251,13 @@ export class DiscordTransport {
     if (VOICE_CHANNEL_TYPES.has(message.channel.type)) return;
 
     const content = message.content.trim();
-    if (!content) return;
+    const attachments = [...message.attachments.values()].map((attachment) => ({
+      id: attachment.id,
+      name: attachment.name ?? "attachment",
+      size: attachment.size,
+      url: attachment.url,
+    }));
+    if (!content && attachments.length === 0) return;
 
     const isDM = message.channel.type === ChannelType.DM;
     const isGroupChat = !isDM;
@@ -280,6 +306,7 @@ export class DiscordTransport {
       channelName,
       messageId: message.id,
       timestamp: message.createdAt,
+      attachments,
     });
   }
 }

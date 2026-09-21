@@ -79,6 +79,53 @@ describe("StreamRouter thread lifecycle", () => {
   });
 });
 
+describe("StreamRouter file markers", () => {
+  it("hides a partial marker while streaming", async () => {
+    const fake = fakeTransport();
+    const router = new StreamRouter(asTransport(fake));
+
+    await router.handleEvent(CHANNEL, {
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "Done\n[[discord-file:report" },
+    });
+    await vi.advanceTimersByTimeAsync(EDIT_INTERVAL_MS);
+
+    expect(fake.anchor.edit).toHaveBeenCalledWith(expect.objectContaining({ currentStep: "Done" }));
+  });
+
+  it("requests one final own-line marker after finalizing the anchor", async () => {
+    const fake = fakeTransport();
+    const onFileRequest = vi.fn().mockResolvedValue(undefined);
+    const router = new StreamRouter(asTransport(fake), onFileRequest);
+
+    await router.handleEvent(CHANNEL, {
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "Created it.\n[[discord-file:report.txt]]" },
+    });
+    await router.handleEvent(CHANNEL, { type: "agent_settled" });
+
+    expect(fake.anchor.edit).toHaveBeenLastCalledWith(expect.objectContaining({ currentStep: "Created it." }));
+    expect(onFileRequest).toHaveBeenCalledWith(CHANNEL, "report.txt");
+  });
+
+  it("rejects non-final and multiple markers", async () => {
+    const onFileRequest = vi.fn().mockResolvedValue(undefined);
+    const router = new StreamRouter(asTransport(fakeTransport()), onFileRequest);
+
+    await router.handleEvent(CHANNEL, {
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "[[discord-file:first.txt]]\ntext" },
+    });
+    await router.handleEvent(CHANNEL, { type: "agent_settled" });
+    await router.handleEvent(CHANNEL, {
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "[[discord-file:first.txt]]\n[[discord-file:second.txt]]" },
+    });
+    await router.handleEvent(CHANNEL, { type: "agent_settled" });
+    expect(onFileRequest).not.toHaveBeenCalled();
+  });
+});
+
 describe("StreamRouter thread batching", () => {
   it("batches several tool-call lines accumulated between ticks into one postThreadBatch call", async () => {
     const fake = fakeTransport();

@@ -1,10 +1,12 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { downloadAttachments, resolveOutboundFile } from "./src/attachments.js";
 import { GatewayAuth } from "./src/auth.js";
+import { ChannelQueue } from "./src/channel-queue.js";
 import { CronScheduler } from "./src/cron.js";
 import { loadCronJobs } from "./src/cron-config.js";
-import { DiscordTransport } from "./src/discord.js";
+import { DiscordTransport, type IncomingMessage } from "./src/discord.js";
 import { lookupChannelDirectory, mapChannel } from "./src/routing.js";
 import { SessionManager } from "./src/session.js";
 import { loadState, migrateState, saveState } from "./src/state.js";
@@ -35,7 +37,7 @@ const transport: DiscordTransport = new DiscordTransport(
   )
 );
 
-const streaming = new StreamRouter(transport);
+const streaming = new StreamRouter(transport, (channelId, path) => sendRequestedFile(channelId, path));
 
 const sessions = new SessionManager({
   notifyCrash: state.config.notifyOnCrash,
@@ -49,13 +51,52 @@ const sessions = new SessionManager({
   },
 });
 
+const describeError = (err: unknown): string => (err instanceof Error ? err.message : "Unknown error");
+
+const sendRequestedFile = async (channelId: string, path: string): Promise<void> => {
+  try {
+    const dir = sessions.getDirectory(channelId);
+    if (!dir) throw new Error("The Pi session is no longer available");
+    const file = await resolveOutboundFile(dir, path);
+    await transport.sendFile(channelId, file);
+  } catch (err) {
+    console.error("[attachments] outbound upload failed:", err);
+    await transport
+      .sendMessage(channelId, `Could not send requested file: ${describeError(err)}`)
+      .catch((sendErr) => console.error("[attachments] outbound failure notice failed:", sendErr));
+  }
+};
+
 setInterval(() => sessions.reapIdle(), 60_000);
+
 
 // Channels an unmapped-channel confirm prompt has already been posted for, so we don't
 // re-post it on every subsequent message while the user hasn't responded yet (008).
 const pendingConfirm = new Set<string>();
 
 const MAP_COMMAND = /^\/pi map (\S+)\/(\S+)$/i;
+
+const queue = new ChannelQueue(async (channelId, err) => {
+  console.error("[message] handling failed:", err);
+  await transport
+    .sendMessage(channelId, `Could not process message: ${describeError(err)}`)
+    .catch((sendErr) => console.error("[message] failure notice failed:", sendErr));
+});
+
+const handleMappedPrompt = async (message: IncomingMessage, dir: string): Promise<void> => {
+  let paths: string[] = [];
+  if (message.attachments.length > 0) {
+    transport.sendTyping(message.chatId).catch((err) => console.error("[attachments] typing indicator failed:", err));
+    paths = await downloadAttachments(dir, message.attachments);
+  }
+
+  const pathBlock = paths.length > 0 ? `\n\nAttached files:\n${paths.map((path) => `- ${path}`).join("\n")}` : "";
+  const prompt = message.content || "Please inspect the attached files.";
+  const preview = message.content || message.attachments.map((attachment) => `📎 ${attachment.name}`).join(", ");
+  sessions.getOrCreate(message.chatId, dir);
+  streaming.beginTurn(message.chatId, preview);
+  sessions.sendPrompt(message.chatId, `${prompt}${pathBlock}`);
+};
 
 const persistMapping = (channelId: string, category: string, channelName: string, reply: (text: string) => Promise<void>) => {
   mapChannel(state.config, state.routing, channelId, category, channelName)
@@ -84,13 +125,18 @@ transport.onMessage((message) => {
 
   const dir = lookupChannelDirectory(state.routing, message.chatId);
   if (dir) {
-    sessions.getOrCreate(message.chatId, dir);
-    streaming.beginTurn(message.chatId, message.content);
-    sessions.sendPrompt(message.chatId, message.content);
+    void queue.enqueue(message.chatId, () => handleMappedPrompt(message, dir));
     return;
   }
 
   if (state.ignoredChannels.includes(message.chatId)) return;
+
+  if (message.attachments.length > 0) {
+    transport
+      .sendMessage(message.chatId, "Attachments require a mapped project. Use `/pi map <category>/<channel>` first.")
+      .catch((err) => console.error("[attachments] unmapped notice failed:", err));
+    return;
+  }
 
   mkdtemp(join(tmpdir(), "agent-daemon-"))
     .then((ephemeralDir) => {
