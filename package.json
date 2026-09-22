@@ -1,6 +1,6 @@
 {
   "name": "agent-daemon",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Discord-to-Pi-coding-agent bridge daemon",
   "type": "module",
   "main": "dist/index.js",

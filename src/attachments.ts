@@ -1,5 +1,5 @@
 import { type ReadStream } from "node:fs";
-import { lstat, mkdir, open, realpath, rm } from "node:fs/promises";
+import { access, lstat, mkdir, open, realpath, rm } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 
 export const MAX_ATTACHMENT_COUNT = 5;
@@ -29,6 +29,15 @@ const safeName = (name: string): string => {
 };
 
 const safeId = (id: string): string => id.replace(/[^a-zA-Z0-9_-]/g, "_") || "attachment";
+
+const exists = async (path: string): Promise<boolean> => {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 export const isDiscordCdnUrl = (url: string): boolean => {
   try {
@@ -113,7 +122,8 @@ export const downloadAttachments = async (dir: string, attachments: AttachmentIn
   try {
     const paths: string[] = [];
     for (const attachment of attachments) {
-      const target = resolve(uploadDir, `${safeId(attachment.id)}-${safeName(attachment.name)}`);
+      const plainTarget = resolve(uploadDir, safeName(attachment.name));
+      const target = (await exists(plainTarget)) ? resolve(uploadDir, `${safeId(attachment.id)}-${safeName(attachment.name)}`) : plainTarget;
       if (!isInside(uploadDir, target)) throw new AttachmentError("Invalid attachment filename");
       await downloadFile(
         attachment,

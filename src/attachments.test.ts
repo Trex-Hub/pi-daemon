@@ -29,11 +29,11 @@ describe("downloadAttachments", () => {
 
     const paths = await downloadAttachments(dir, [cdnAttachment({ name: "../../report.txt", size: 2 })]);
 
-    expect(paths).toEqual(["uploads/attachment-1-report.txt"]);
+    expect(paths).toEqual(["uploads/report.txt"]);
     expect(await readFile(join(dir, paths[0]), "utf8")).toBe("ok");
   });
 
-  it("uses attachment IDs to keep same-named files distinct", async () => {
+  it("falls back to the attachment ID only when the plain filename is taken", async () => {
     const dir = await mkdtemp(join(tmpdir(), "agent-daemon-attachment-"));
     const fetch = vi.fn().mockResolvedValueOnce(new Response("a")).mockResolvedValueOnce(new Response("b"));
     vi.stubGlobal("fetch", fetch);
@@ -43,7 +43,7 @@ describe("downloadAttachments", () => {
       cdnAttachment({ id: "second", name: "report.txt", size: 1 }),
     ]);
 
-    expect(paths).toEqual(["uploads/first-report.txt", "uploads/second-report.txt"]);
+    expect(paths).toEqual(["uploads/report.txt", "uploads/second-report.txt"]);
   });
 
   it("keeps earlier uploads when a later download fails", async () => {
@@ -60,7 +60,7 @@ describe("downloadAttachments", () => {
 
     await expect(downloadAttachments(dir, [cdnAttachment({ id: "partial", size: 1 })])).rejects.toThrow("exceeds the 10 MiB");
     expect(await readFile(join(dir, "uploads", "earlier.txt"), "utf8")).toBe("keep");
-    await expect(readFile(join(dir, "uploads", "partial-report.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(dir, "uploads", "report.txt"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("rejects more than five attachments before fetching", async () => {
