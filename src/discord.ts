@@ -2,6 +2,7 @@ import {
   ActionRowBuilder,
   type AutocompleteInteraction,
   ButtonBuilder,
+  type ButtonInteraction,
   ButtonStyle,
   ChannelType,
   type ChatInputCommandInteraction,
@@ -52,6 +53,23 @@ export type ButtonAction = {
   reply(text: string): Promise<void>;
 };
 
+/** An `extension_ui_request` dialog (ask_user and friends) rendered to Discord. */
+export type AskPrompt = {
+  method: "select" | "confirm" | "input" | "editor";
+  title: string;
+  context?: string;
+  message?: string;
+  options?: string[];
+};
+
+/** A click on an ask-prompt button (Yes/No/Cancel/option index). */
+export type AskButtonAction = {
+  channelId: string;
+  id: string;
+  choice: string;
+  respond(content: string): Promise<void>;
+};
+
 /** One `/stop`, `/continue`, or `/model` invocation, normalized for routing downstream. */
 export type SlashCommandInvocation = {
   commandName: string;
@@ -79,6 +97,7 @@ export class DiscordTransport {
   private botUserId = "";
   private messageHandler?: (message: IncomingMessage) => void;
   private buttonHandler?: (action: ButtonAction) => void;
+  private askButtonHandler?: (action: AskButtonAction) => void;
   private slashCommandHandler?: (invocation: SlashCommandInvocation) => void;
   private autocompleteHandler?: (invocation: AutocompleteInvocation) => void;
 
@@ -93,6 +112,10 @@ export class DiscordTransport {
 
   onButtonAction(handler: (action: ButtonAction) => void): void {
     this.buttonHandler = handler;
+  }
+
+  onAskButton(handler: (action: AskButtonAction) => void): void {
+    this.askButtonHandler = handler;
   }
 
   onSlashCommand(handler: (invocation: SlashCommandInvocation) => void): void {
@@ -259,6 +282,62 @@ export class DiscordTransport {
     });
   }
 
+  /** Posts an extension_ui_request dialog (ask_user and friends) with buttons matching its method, always to the main channel — never the tool-log thread. Returns the message id so the caller can finalize it later for text-answered asks. */
+  async sendAskPrompt(chatId: string, id: string, ask: AskPrompt): Promise<string> {
+    if (!this.client) throw new Error("Discord not connected");
+    const channel = await this.client.channels.fetch(chatId);
+    if (!channel?.isTextBased() || !("send" in channel)) throw new Error(`Cannot send to channel ${chatId}`);
+
+    const messageBlock = ask.message ? `\n\n${ask.message}` : "";
+    const contextBlock = ask.context ? `\n\nContext:\n${ask.context}` : "";
+    let content = `🤖 asks: **${ask.title}**${messageBlock}${contextBlock}`;
+
+    const cancelButton = new ButtonBuilder().setCustomId(`ask:${chatId}:${id}:cancel`).setLabel("Cancel").setStyle(ButtonStyle.Secondary);
+    const buttons: ButtonBuilder[] = [];
+
+    if (ask.method === "confirm") {
+      buttons.push(
+        new ButtonBuilder().setCustomId(`ask:${chatId}:${id}:yes`).setLabel("Yes").setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`ask:${chatId}:${id}:no`).setLabel("No").setStyle(ButtonStyle.Danger),
+        cancelButton
+      );
+    } else if (ask.method === "select" && ask.options && ask.options.length > 0 && ask.options.length <= 24) {
+      for (const [index, option] of ask.options.entries()) {
+        buttons.push(
+          new ButtonBuilder()
+            .setCustomId(`ask:${chatId}:${id}:${index}`)
+            .setLabel(option.length > 80 ? `${option.slice(0, 79)}…` : option)
+            .setStyle(ButtonStyle.Primary)
+        );
+      }
+      buttons.push(cancelButton);
+    } else if (ask.method === "select") {
+      const list = (ask.options ?? []).map((option, index) => `${index + 1}. ${option}`).join("\n");
+      content += `\n\nOptions:\n${list}\n\nReply with your choice, or press Cancel.`;
+      buttons.push(cancelButton);
+    } else {
+      content += "\n\nReply in this channel to answer, or press Cancel.";
+      buttons.push(cancelButton);
+    }
+
+    const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+    for (let i = 0; i < buttons.length; i += 5) {
+      rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(buttons.slice(i, i + 5)));
+    }
+
+    const message = await channel.send({ content, components: rows, allowedMentions: { parse: [] } });
+    return message.id;
+  }
+
+  /** Edits a resolved ask prompt to show its text answer and drop its buttons (the text-answer path has no interaction to update in place). */
+  async finalizeAskPrompt(chatId: string, messageId: string, resultText: string): Promise<void> {
+    if (!this.client) throw new Error("Discord not connected");
+    const channel = await this.client.channels.fetch(chatId);
+    if (!channel?.isTextBased() || !("messages" in channel)) throw new Error(`Cannot fetch message in channel ${chatId}`);
+    const message = await channel.messages.fetch(messageId);
+    await message.edit({ content: `${message.content}\n\n${resultText}`, components: [] });
+  }
+
   /** Registers /stop, /continue, /model against every guild the bot is currently in. Re-run on every connect — cheap, Discord dedups by name. */
   private async registerSlashCommands(): Promise<void> {
     if (!this.client) return;
@@ -282,6 +361,12 @@ export class DiscordTransport {
       return;
     }
     if (!interaction.isButton()) return;
+
+    if (interaction.customId.startsWith("ask:")) {
+      await this.handleAskButton(interaction);
+      return;
+    }
+
     const [ns, action, channelId] = interaction.customId.split(":");
     if (ns !== "pi" || !this.buttonHandler) return;
     if (action !== "create" && action !== "attach" && action !== "ignore") return;
@@ -299,6 +384,23 @@ export class DiscordTransport {
       channelName,
       reply: async (text: string) => {
         await interaction.followUp(text);
+      },
+    });
+  }
+
+  /** Ack within the ~3s interaction window first (same reasoning as handleSlashCommand), then let the handler resolve the ask and edit the message in place via editReply. */
+  private async handleAskButton(interaction: ButtonInteraction): Promise<void> {
+    const [, channelId, id, choice] = interaction.customId.split(":");
+    if (!this.askButtonHandler || !channelId || !id || !choice) return;
+
+    await interaction.deferUpdate();
+
+    this.askButtonHandler({
+      channelId,
+      id,
+      choice,
+      respond: async (content: string) => {
+        await interaction.editReply({ content, components: [] });
       },
     });
   }

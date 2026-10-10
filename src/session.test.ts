@@ -14,11 +14,11 @@ function fakeProc(pid: number) {
 function fakeRpcProc(pid: number) {
   const proc = fakeProc(pid);
   const stdout = new EventEmitter();
-  const stdin = { write: vi.fn() };
+  const stdin = { write: vi.fn(), on: vi.fn(), writable: true };
   return Object.assign(proc, { stdout, stdin }) as unknown as ChildProcess & {
     kill: ReturnType<typeof vi.fn>;
     stdout: EventEmitter;
-    stdin: { write: ReturnType<typeof vi.fn> };
+    stdin: { write: ReturnType<typeof vi.fn>; on: ReturnType<typeof vi.fn>; writable: boolean };
   };
 }
 
@@ -94,6 +94,21 @@ describe("SessionManager", () => {
     procs[0].emit("exit", 1, null);
 
     expect(onCrash).toHaveBeenCalledWith("c1");
+  });
+
+  it("does not reap a session with a pending ask, even past the idle timeout", () => {
+    const proc = fakeProc(450);
+    const manager = new SessionManager({
+      notifyCrash: false,
+      idleTimeoutMs: 1000,
+      spawnFn: () => proc,
+    });
+
+    const session = manager.getOrCreate("c1", "/dir");
+    manager.setAwaitingInput("c1", true);
+    manager.reapIdle(session.lastActivity + 2000);
+
+    expect(proc.kill).not.toHaveBeenCalled();
   });
 
   it("reaps sessions idle past the timeout", () => {
@@ -208,6 +223,38 @@ describe("SessionManager", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe("respondUIRequest", () => {
+    it("writes an extension_ui_response line matching the given id and payload", () => {
+      const proc = fakeRpcProc(700);
+      const manager = new SessionManager({ notifyCrash: false, spawnFn: () => proc });
+      manager.getOrCreate("c1", "/dir");
+
+      const delivered = manager.respondUIRequest("c1", "uuid-1", { value: "yes" });
+
+      expect(delivered).toBe(true);
+      expect(JSON.parse(proc.stdin.write.mock.calls[0][0] as string)).toEqual({
+        type: "extension_ui_response",
+        id: "uuid-1",
+        value: "yes",
+      });
+    });
+
+    it("returns false when the channel has no live session", () => {
+      const manager = new SessionManager({ notifyCrash: false, spawnFn: () => fakeProc(701) });
+      expect(manager.respondUIRequest("nope", "uuid-1", { value: "yes" })).toBe(false);
+    });
+
+    it("returns false when stdin isn't writable, without throwing", () => {
+      const proc = fakeRpcProc(702);
+      proc.stdin.writable = false;
+      const manager = new SessionManager({ notifyCrash: false, spawnFn: () => proc });
+      manager.getOrCreate("c1", "/dir");
+
+      expect(manager.respondUIRequest("c1", "uuid-1", { value: "yes" })).toBe(false);
+      expect(proc.stdin.write).not.toHaveBeenCalled();
     });
   });
 });

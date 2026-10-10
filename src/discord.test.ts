@@ -18,6 +18,18 @@ const fakeInteraction = (overrides: Partial<Record<string, unknown>> = {}) => ({
   ...overrides,
 });
 
+const fakeButtonInteraction = (customId: string, overrides: Partial<Record<string, unknown>> = {}) => ({
+  isAutocomplete: () => false,
+  isChatInputCommand: () => false,
+  isButton: () => true,
+  customId,
+  channel: { parent: { name: "cat" }, name: "chan" },
+  deferUpdate: vi.fn().mockResolvedValue(undefined),
+  editReply: vi.fn().mockResolvedValue(undefined),
+  followUp: vi.fn().mockResolvedValue(undefined),
+  ...overrides,
+});
+
 const fakeAutocomplete = (overrides: Partial<Record<string, unknown>> = {}) => ({
   isAutocomplete: () => true,
   commandName: "model",
@@ -106,6 +118,54 @@ describe("DiscordTransport autocomplete", () => {
     await (transport as any).handleInteraction(interaction);
 
     expect(interaction.respond).toHaveBeenCalledWith([]);
+  });
+});
+
+describe("DiscordTransport ask buttons", () => {
+  it("routes an ask: customId to the ask-button handler, independent of the pi: namespace", async () => {
+    const auth = {} as unknown as GatewayAuth;
+    const transport = new DiscordTransport("token", auth);
+    const onAskButton = vi.fn();
+    const onButtonAction = vi.fn();
+    transport.onAskButton(onAskButton);
+    transport.onButtonAction(onButtonAction);
+
+    const interaction = fakeButtonInteraction("ask:chan-1:uuid-1:yes");
+    await (transport as any).handleInteraction(interaction);
+
+    expect(interaction.deferUpdate).toHaveBeenCalled();
+    expect(onAskButton).toHaveBeenCalledWith(expect.objectContaining({ channelId: "chan-1", id: "uuid-1", choice: "yes" }));
+    expect(onButtonAction).not.toHaveBeenCalled();
+  });
+
+  it("respond() edits the original message in place and drops its buttons", async () => {
+    const auth = {} as unknown as GatewayAuth;
+    const transport = new DiscordTransport("token", auth);
+    let captured: { respond(content: string): Promise<void> } | undefined;
+    transport.onAskButton((action) => {
+      captured = action;
+    });
+
+    const interaction = fakeButtonInteraction("ask:chan-1:uuid-1:no");
+    await (transport as any).handleInteraction(interaction);
+    await captured?.respond("Answered: no");
+
+    expect(interaction.editReply).toHaveBeenCalledWith({ content: "Answered: no", components: [] });
+  });
+
+  it("leaves pi: namespace buttons routed to the existing button handler", async () => {
+    const auth = {} as unknown as GatewayAuth;
+    const transport = new DiscordTransport("token", auth);
+    const onAskButton = vi.fn();
+    const onButtonAction = vi.fn();
+    transport.onAskButton(onAskButton);
+    transport.onButtonAction(onButtonAction);
+
+    const interaction = fakeButtonInteraction("pi:create:chan-1");
+    await (transport as any).handleInteraction(interaction);
+
+    expect(onButtonAction).toHaveBeenCalledWith(expect.objectContaining({ channelId: "chan-1", action: "create" }));
+    expect(onAskButton).not.toHaveBeenCalled();
   });
 });
 

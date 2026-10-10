@@ -38,8 +38,6 @@ const transport: DiscordTransport = new DiscordTransport(
   )
 );
 
-const streaming = new StreamRouter(transport, (channelId, path) => sendRequestedFile(channelId, path));
-
 const sessions = new SessionManager({
   notifyCrash: state.config.notifyOnCrash,
   onCrash: (channelId) => {
@@ -67,6 +65,11 @@ const sendRequestedFile = async (channelId: string, path: string): Promise<void>
       .catch((sendErr) => console.error("[attachments] outbound failure notice failed:", sendErr));
   }
 };
+
+const streaming = new StreamRouter(transport, (channelId, path) => sendRequestedFile(channelId, path), {
+  respond: (channelId, id, payload) => sessions.respondUIRequest(channelId, id, payload),
+  setAwaitingInput: (channelId, waiting) => sessions.setAwaitingInput(channelId, waiting),
+});
 
 setInterval(() => sessions.reapIdle(), 60_000);
 
@@ -114,6 +117,16 @@ const persistMapping = (channelId: string, category: string, channelName: string
 };
 
 transport.onMessage((message) => {
+  // An open ask_user question always wins over normal prompt routing for this channel.
+  streaming
+    .tryResolveAskText(message.chatId, message.content)
+    .then((resolved) => {
+      if (!resolved) routeMessage(message);
+    })
+    .catch((err) => console.error("[streaming] ask-resolution failed:", err));
+});
+
+const routeMessage = (message: IncomingMessage): void => {
   const { allowedChannels } = state.config;
   if (!allowedChannels.includes("*") && !allowedChannels.includes(message.chatId)) return;
 
@@ -153,7 +166,7 @@ transport.onMessage((message) => {
       .sendConfirm(message.chatId, message.category, message.channelName)
       .catch((err) => console.error("[discord] confirm prompt failed:", err));
   }
-});
+};
 
 transport.onButtonAction((action) => {
   if (action.action === "create") {
@@ -171,6 +184,11 @@ transport.onButtonAction((action) => {
   pendingConfirm.delete(action.channelId);
   saveState(state).catch((err) => console.error("[state] save failed:", err));
   action.reply("Ignored — this channel won't spawn a session.").catch(() => {});
+});
+
+transport.onAskButton(async (action) => {
+  const resolved = await streaming.resolveAsk(action.channelId, action.id, action.choice);
+  await action.respond(resolved ? "Answered." : "This question has expired.").catch(() => {});
 });
 
 transport.onSlashCommand(async (cmd) => {

@@ -12,6 +12,23 @@ type PendingCall = {
 
 export type FileRequestHandler = (channelId: string, path: string) => Promise<void>;
 
+export type AskRequest = {
+  id: string;
+  method: "select" | "confirm" | "input" | "editor";
+  title: string;
+  context?: string;
+  message?: string;
+  options?: string[];
+  promptMessageId?: string;
+};
+
+export type AskBridge = {
+  respond: (channelId: string, id: string, payload: Record<string, unknown>) => boolean;
+  setAwaitingInput: (channelId: string, waiting: boolean) => void;
+};
+
+const DIALOG_METHODS = new Set(["select", "confirm", "input", "editor"]);
+
 const markerLine = /^\s*\[\[discord-file:/;
 const completeMarker = /^\s*\[\[discord-file:([^\]\r\n]+)\]\]\s*$/;
 
@@ -48,6 +65,7 @@ type TurnState = {
   promptPreview: string;
   timer?: NodeJS.Timeout;
   lastTypingAt: number;
+  pendingAsks: AskRequest[];
 };
 
 const truncateValue = (value: unknown, max = ARG_VALUE_MAX): string => {
@@ -86,7 +104,8 @@ export class StreamRouter {
 
   constructor(
     private transport: DiscordTransport,
-    private onFileRequest?: FileRequestHandler
+    private onFileRequest?: FileRequestHandler,
+    private ask?: AskBridge
   ) {}
 
   /** Call right before sending the prompt to `pi`, so the eventual anchor/thread can be named from it. */
@@ -129,6 +148,23 @@ export class StreamRouter {
       turn.dirty = true;
       turn.threadLines.push(turn.lastToolLine);
       turn.threadDirty = true;
+    } else if (e.type === "extension_ui_request") {
+      const method = String(e.method);
+      if (!DIALOG_METHODS.has(method)) return; // fire-and-forget (notify/setStatus/setWidget/setTitle/set_editor_text) — safe to ignore
+      const turn = await this.ensureTurn(channelId);
+      const ask: AskRequest = {
+        id: String(e.id),
+        method: method as AskRequest["method"],
+        title: String(e.title ?? ""),
+        context: typeof e.context === "string" ? e.context : undefined,
+        message: typeof e.message === "string" ? e.message : undefined,
+        options: Array.isArray(e.options) ? e.options.map(String) : undefined,
+      };
+      turn.pendingAsks.push(ask);
+      if (turn.pendingAsks.length === 1) {
+        this.ask?.setAwaitingInput(channelId, true);
+        await this.postNextAsk(channelId, turn);
+      }
     } else if (e.type === "agent_settled") {
       const turn = await this.ensureTurn(channelId);
       const path = requestedFile(turn.text);
@@ -167,6 +203,7 @@ export class StreamRouter {
       threadDirty: false,
       promptPreview,
       lastTypingAt: 0,
+      pendingAsks: [],
     };
     this.refreshTyping(channelId, state);
     state.timer = setInterval(() => {
@@ -195,6 +232,67 @@ export class StreamRouter {
         turn.threadLines = [];
         turn.threadDirty = false;
       });
+  }
+
+  /** Renders the current queue head's ask prompt to Discord, if any. No-op when the queue is empty. */
+  private async postNextAsk(channelId: string, turn: TurnState): Promise<void> {
+    const ask = turn.pendingAsks[0];
+    if (!ask) return;
+    try {
+      ask.promptMessageId = await this.transport.sendAskPrompt(channelId, ask.id, {
+        method: ask.method,
+        title: ask.title,
+        context: ask.context,
+        message: ask.message,
+        options: ask.options,
+      });
+    } catch (err) {
+      console.error("[streaming] failed to post ask prompt:", err);
+    }
+  }
+
+  private buildAskPayload(ask: AskRequest, choice: string): Record<string, unknown> {
+    if (choice === "cancel") return { cancelled: true };
+    if (choice === "yes") return { confirmed: true };
+    if (choice === "no") return { confirmed: false };
+    const index = Number(choice);
+    if (!Number.isNaN(index) && ask.options?.[index] !== undefined) return { value: ask.options[index] };
+    return { cancelled: true };
+  }
+
+  /** Resolves the queue head via a button click — rejects a stale/non-head id instead of guessing. Returns whether delivery to `pi` actually succeeded. */
+  async resolveAsk(channelId: string, id: string, choice: string): Promise<boolean> {
+    const pending = this.turns.get(channelId);
+    if (!pending) return false;
+    const turn = await pending;
+    const ask = turn.pendingAsks[0];
+    if (!ask || ask.id !== id) return false;
+
+    const delivered = this.ask?.respond(channelId, id, this.buildAskPayload(ask, choice)) ?? false;
+    turn.pendingAsks.shift();
+    if (turn.pendingAsks.length > 0) await this.postNextAsk(channelId, turn);
+    else this.ask?.setAwaitingInput(channelId, false);
+    return delivered;
+  }
+
+  /** Consumes `text` as the answer to an open input/editor ask, if one is waiting on this channel. Returns false (no-op) otherwise, so the caller falls through to normal prompt routing. */
+  async tryResolveAskText(channelId: string, text: string): Promise<boolean> {
+    const pending = this.turns.get(channelId);
+    if (!pending) return false;
+    const turn = await pending;
+    const ask = turn.pendingAsks[0];
+    if (!ask || (ask.method !== "input" && ask.method !== "editor")) return false;
+
+    this.ask?.respond(channelId, ask.id, { value: text });
+    turn.pendingAsks.shift();
+    if (ask.promptMessageId) {
+      this.transport
+        .finalizeAskPrompt(channelId, ask.promptMessageId, `Answered: ${text}`)
+        .catch((err) => console.error("[streaming] failed to finalize ask prompt:", err));
+    }
+    if (turn.pendingAsks.length > 0) await this.postNextAsk(channelId, turn);
+    else this.ask?.setAwaitingInput(channelId, false);
+    return true;
   }
 
   private refreshTyping(channelId: string, turn: TurnState): void {

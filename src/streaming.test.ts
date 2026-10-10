@@ -1,21 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnchorHandle } from "./anchor.js";
 import type { DiscordTransport } from "./discord.js";
-import { EDIT_INTERVAL_MS, StreamRouter } from "./streaming.js";
+import { type AskBridge, EDIT_INTERVAL_MS, StreamRouter } from "./streaming.js";
 
 function fakeTransport() {
   const anchor: AnchorHandle = { messageId: "anchor-1", edit: vi.fn().mockResolvedValue(undefined) };
+  let nextAskMessageId = 0;
   return {
     anchor,
     sendAnchor: vi.fn().mockResolvedValue(anchor),
     sendTyping: vi.fn().mockResolvedValue(undefined),
     createToolThread: vi.fn().mockResolvedValue("thread-1"),
     postThreadBatch: vi.fn().mockResolvedValue(undefined),
+    sendAskPrompt: vi.fn().mockImplementation(() => Promise.resolve(`ask-msg-${nextAskMessageId++}`)),
+    finalizeAskPrompt: vi.fn().mockResolvedValue(undefined),
   };
 }
 
 function asTransport(fake: ReturnType<typeof fakeTransport>): DiscordTransport {
   return fake as unknown as DiscordTransport;
+}
+
+function fakeAskBridge() {
+  return {
+    respond: vi.fn<AskBridge["respond"]>().mockReturnValue(true),
+    setAwaitingInput: vi.fn<AskBridge["setAwaitingInput"]>(),
+  };
 }
 
 const CHANNEL = "chan-1";
@@ -177,5 +187,102 @@ describe("StreamRouter thread batching", () => {
     const endB = lines.find((l: string) => l.includes(": B"));
     expect(endA).toContain("(200ms)");
     expect(endB).toContain("(100ms)");
+  });
+});
+
+describe("StreamRouter ask_user dialogs", () => {
+  it("renders a dialog method's extension_ui_request via sendAskPrompt", async () => {
+    const fake = fakeTransport();
+    const ask = fakeAskBridge();
+    const router = new StreamRouter(asTransport(fake), undefined, ask);
+
+    await router.handleEvent(CHANNEL, {
+      type: "extension_ui_request",
+      id: "uuid-1",
+      method: "confirm",
+      title: "Clear session?",
+      message: "All messages will be lost.",
+    });
+
+    expect(fake.sendAskPrompt).toHaveBeenCalledWith(CHANNEL, "uuid-1", {
+      method: "confirm",
+      title: "Clear session?",
+      context: undefined,
+      message: "All messages will be lost.",
+      options: undefined,
+    });
+    expect(ask.setAwaitingInput).toHaveBeenCalledWith(CHANNEL, true);
+  });
+
+  it("ignores fire-and-forget extension_ui_request methods", async () => {
+    const fake = fakeTransport();
+    const ask = fakeAskBridge();
+    const router = new StreamRouter(asTransport(fake), undefined, ask);
+
+    await router.handleEvent(CHANNEL, { type: "extension_ui_request", id: "uuid-2", method: "notify", message: "hi" });
+
+    expect(fake.sendAskPrompt).not.toHaveBeenCalled();
+    expect(ask.setAwaitingInput).not.toHaveBeenCalled();
+  });
+
+  it("queues a second concurrent ask — it renders only after the first resolves", async () => {
+    const fake = fakeTransport();
+    const ask = fakeAskBridge();
+    const router = new StreamRouter(asTransport(fake), undefined, ask);
+
+    await router.handleEvent(CHANNEL, { type: "extension_ui_request", id: "uuid-1", method: "confirm", title: "First?" });
+    await router.handleEvent(CHANNEL, { type: "extension_ui_request", id: "uuid-2", method: "confirm", title: "Second?" });
+
+    expect(fake.sendAskPrompt).toHaveBeenCalledTimes(1);
+    expect(fake.sendAskPrompt).toHaveBeenCalledWith(CHANNEL, "uuid-1", expect.objectContaining({ title: "First?" }));
+
+    await router.resolveAsk(CHANNEL, "uuid-1", "yes");
+
+    expect(fake.sendAskPrompt).toHaveBeenCalledTimes(2);
+    expect(fake.sendAskPrompt).toHaveBeenLastCalledWith(CHANNEL, "uuid-2", expect.objectContaining({ title: "Second?" }));
+  });
+
+  it("resolveAsk rejects an id that isn't the current queue head", async () => {
+    const fake = fakeTransport();
+    const ask = fakeAskBridge();
+    const router = new StreamRouter(asTransport(fake), undefined, ask);
+
+    await router.handleEvent(CHANNEL, { type: "extension_ui_request", id: "uuid-1", method: "confirm", title: "First?" });
+
+    const resolved = await router.resolveAsk(CHANNEL, "stale-id", "yes");
+
+    expect(resolved).toBe(false);
+    expect(ask.respond).not.toHaveBeenCalled();
+  });
+
+  it("resolveAsk delivers the right payload shape per method/choice", async () => {
+    const fake = fakeTransport();
+    const ask = fakeAskBridge();
+    const router = new StreamRouter(asTransport(fake), undefined, ask);
+
+    await router.handleEvent(CHANNEL, {
+      type: "extension_ui_request",
+      id: "uuid-1",
+      method: "select",
+      title: "Pick one",
+      options: ["Allow", "Block"],
+    });
+    await router.resolveAsk(CHANNEL, "uuid-1", "1");
+
+    expect(ask.respond).toHaveBeenCalledWith(CHANNEL, "uuid-1", { value: "Block" });
+  });
+
+  it("tryResolveAskText only consumes text while an input/editor ask is open", async () => {
+    const fake = fakeTransport();
+    const ask = fakeAskBridge();
+    const router = new StreamRouter(asTransport(fake), undefined, ask);
+
+    expect(await router.tryResolveAskText(CHANNEL, "hello")).toBe(false);
+
+    await router.handleEvent(CHANNEL, { type: "extension_ui_request", id: "uuid-1", method: "input", title: "Enter a value" });
+
+    expect(await router.tryResolveAskText(CHANNEL, "my answer")).toBe(true);
+    expect(ask.respond).toHaveBeenCalledWith(CHANNEL, "uuid-1", { value: "my answer" });
+    expect(fake.finalizeAskPrompt).toHaveBeenCalledWith(CHANNEL, "ask-msg-0", "Answered: my answer");
   });
 });

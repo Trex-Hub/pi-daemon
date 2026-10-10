@@ -22,6 +22,8 @@ export type Session = {
   lastActivity: number;
   nextCommandId: number;
   pending: Map<number, PendingCommand>;
+  /** True while an extension_ui_request (e.g. ask_user) is open for this channel — exempts it from reapIdle. */
+  hasPendingAsk: boolean;
 };
 
 export type SpawnFn = (dir: string) => ChildProcess;
@@ -130,6 +132,26 @@ export class SessionManager {
     return this.sendCommand(channelId, { type: "abort" });
   }
 
+  /** Writes an extension_ui_response answering a pending extension_ui_request (e.g. ask_user). Fire-and-forget — pi resolves it locally. Returns false if there's no live, writable session for this channel. */
+  respondUIRequest(channelId: string, id: string, payload: Record<string, unknown>): boolean {
+    const session = this.sessions.get(channelId);
+    if (!session?.process.stdin?.writable) return false;
+    session.lastActivity = Date.now();
+    try {
+      session.process.stdin.write(`${JSON.stringify({ type: "extension_ui_response", id, ...payload })}\n`);
+      return true;
+    } catch (err) {
+      console.error("[session] failed to deliver ui response:", err);
+      return false;
+    }
+  }
+
+  /** Marks whether `channelId` has an open extension_ui_request — reapIdle skips sessions waiting on a human answer. */
+  setAwaitingInput(channelId: string, waiting: boolean): void {
+    const session = this.sessions.get(channelId);
+    if (session) session.hasPendingAsk = waiting;
+  }
+
   setModel(channelId: string, provider: string, modelId: string): Promise<PiCommandResult> {
     return this.sendCommand(channelId, { type: "set_model", provider, modelId });
   }
@@ -149,6 +171,7 @@ export class SessionManager {
   /** Kills and drops any session idle past the timeout. Call on an interval. */
   reapIdle(now: number = Date.now()): void {
     for (const [channelId, session] of this.sessions) {
+      if (session.hasPendingAsk) continue;
       if (now - session.lastActivity > this.idleTimeoutMs) {
         session.process.kill();
         this.sessions.delete(channelId);
@@ -166,8 +189,13 @@ export class SessionManager {
       lastActivity: Date.now(),
       nextCommandId: 0,
       pending: new Map(),
+      hasPendingAsk: false,
     };
     this.sessions.set(channelId, session);
+
+    // Without this, a write to a closed/broken stdin (e.g. mid-crash) throws an
+    // unhandled 'error' event and takes down the whole daemon process.
+    proc.stdin?.on("error", (err) => console.error("[session] stdin error:", err));
 
     attachEventReader(proc, (event) => {
       if (isResponseEvent(event)) {
