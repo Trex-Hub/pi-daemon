@@ -1,8 +1,10 @@
 import {
   ActionRowBuilder,
+  type AutocompleteInteraction,
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
+  type ChatInputCommandInteraction,
   Client,
   Events,
   GatewayIntentBits,
@@ -14,6 +16,7 @@ import {
 import { type AnchorHandle, type AnchorState, buildAnchorContainer, chunkMessage, DISCORD_MESSAGE_LIMIT } from "./anchor.js";
 import type { OutboundFile } from "./attachments.js";
 import type { GatewayAuth } from "./auth.js";
+import { buildSlashCommands } from "./commands.js";
 
 export type IncomingAttachment = {
   id: string;
@@ -49,11 +52,35 @@ export type ButtonAction = {
   reply(text: string): Promise<void>;
 };
 
+/** One `/stop`, `/continue`, or `/model` invocation, normalized for routing downstream. */
+export type SlashCommandInvocation = {
+  commandName: string;
+  /** Discord subcommand name, e.g. "set"/"list" for /model — null when the command has none. */
+  subcommand: string | null;
+  channelId: string;
+  userId: string;
+  getStringOption(name: string): string | null;
+  reply(text: string): Promise<void>;
+};
+
+/** An in-progress `/model set` autocomplete request for one option ("provider" or "model"). */
+export type AutocompleteInvocation = {
+  commandName: string;
+  optionName: string;
+  /** What the user has typed so far in the focused option. */
+  value: string;
+  channelId: string;
+  getStringOption(name: string): string | null;
+  respond(choices: { name: string; value: string }[]): Promise<void>;
+};
+
 export class DiscordTransport {
   private client: Client | null = null;
   private botUserId = "";
   private messageHandler?: (message: IncomingMessage) => void;
   private buttonHandler?: (action: ButtonAction) => void;
+  private slashCommandHandler?: (invocation: SlashCommandInvocation) => void;
+  private autocompleteHandler?: (invocation: AutocompleteInvocation) => void;
 
   constructor(
     private token: string,
@@ -66,6 +93,14 @@ export class DiscordTransport {
 
   onButtonAction(handler: (action: ButtonAction) => void): void {
     this.buttonHandler = handler;
+  }
+
+  onSlashCommand(handler: (invocation: SlashCommandInvocation) => void): void {
+    this.slashCommandHandler = handler;
+  }
+
+  onAutocomplete(handler: (invocation: AutocompleteInvocation) => void): void {
+    this.autocompleteHandler = handler;
   }
 
   async connect(): Promise<void> {
@@ -83,6 +118,7 @@ export class DiscordTransport {
     client.once(Events.ClientReady, (ready) => {
       this.botUserId = ready.user.id;
       console.log(`[discord] logged in as ${ready.user.tag}`);
+      this.registerSlashCommands().catch((err) => console.error("[discord] slash command registration failed:", err));
     });
 
     client.on(Events.Error, (err) => {
@@ -223,7 +259,28 @@ export class DiscordTransport {
     });
   }
 
+  /** Registers /stop, /continue, /model against every guild the bot is currently in. Re-run on every connect — cheap, Discord dedups by name. */
+  private async registerSlashCommands(): Promise<void> {
+    if (!this.client) return;
+    const commands = await buildSlashCommands();
+    for (const guild of this.client.guilds.cache.values()) {
+      try {
+        await guild.commands.set(commands);
+      } catch (err) {
+        console.error(`[discord] slash command registration failed for guild ${guild.id}:`, err);
+      }
+    }
+  }
+
   private async handleInteraction(interaction: Interaction): Promise<void> {
+    if (interaction.isAutocomplete()) {
+      await this.handleAutocomplete(interaction);
+      return;
+    }
+    if (interaction.isChatInputCommand()) {
+      await this.handleSlashCommand(interaction);
+      return;
+    }
     if (!interaction.isButton()) return;
     const [ns, action, channelId] = interaction.customId.split(":");
     if (ns !== "pi" || !this.buttonHandler) return;
@@ -242,6 +299,68 @@ export class DiscordTransport {
       channelName,
       reply: async (text: string) => {
         await interaction.followUp(text);
+      },
+    });
+  }
+
+  private async handleSlashCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+    if (!this.slashCommandHandler) return;
+
+    const chatId = interaction.channelId;
+    const userId = interaction.user.id;
+    const username = interaction.user.username;
+
+    // Ack within Discord's ~3s window before anything else — checkAuthorization is normally
+    // in-memory fast, but any delay here previously risked a 10062 "Unknown interaction".
+    await interaction.deferReply();
+
+    // Slash commands are guild-scoped registrations (never reachable from a DM) and an explicit,
+    // deliberate invocation by the user — so isGroupChat/wasMentioned are always true here.
+    const isAuthorized = await this.auth.checkAuthorization(
+      userId,
+      chatId,
+      username,
+      true,
+      true,
+      "discord",
+      undefined,
+      interaction.guildId ?? undefined
+    );
+    if (!isAuthorized) {
+      await interaction.editReply("Not authorized to use commands in this channel.");
+      return;
+    }
+
+    this.slashCommandHandler({
+      commandName: interaction.commandName,
+      subcommand: interaction.options.getSubcommand(false),
+      channelId: chatId,
+      userId,
+      getStringOption: (name) => interaction.options.getString(name),
+      reply: async (text: string) => {
+        const [first, ...rest] = chunkMessage(text);
+        await interaction.editReply(first);
+        for (const chunk of rest) await interaction.followUp(chunk);
+      },
+    });
+  }
+
+  /** Autocomplete has its own hard 3s deadline with no defer — a slow/no handler just yields no suggestions. */
+  private async handleAutocomplete(interaction: AutocompleteInteraction): Promise<void> {
+    if (!this.autocompleteHandler) {
+      await interaction.respond([]).catch(() => {});
+      return;
+    }
+
+    const focused = interaction.options.getFocused(true);
+    this.autocompleteHandler({
+      commandName: interaction.commandName,
+      optionName: focused.name,
+      value: String(focused.value),
+      channelId: interaction.channelId,
+      getStringOption: (name) => interaction.options.getString(name),
+      respond: async (choices) => {
+        await interaction.respond(choices.slice(0, 25)).catch(() => {});
       },
     });
   }

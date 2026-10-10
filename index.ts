@@ -7,6 +7,7 @@ import { ChannelQueue } from "./src/channel-queue.js";
 import { CronScheduler } from "./src/cron.js";
 import { loadCronJobs } from "./src/cron-config.js";
 import { DiscordTransport, type IncomingMessage } from "./src/discord.js";
+import { isPiPackageInstalled } from "./src/pi-packages.js";
 import { lookupChannelDirectory, mapChannel } from "./src/routing.js";
 import { SessionManager } from "./src/session.js";
 import { loadState, migrateState, saveState } from "./src/state.js";
@@ -170,6 +171,86 @@ transport.onButtonAction((action) => {
   pendingConfirm.delete(action.channelId);
   saveState(state).catch((err) => console.error("[state] save failed:", err));
   action.reply("Ignored — this channel won't spawn a session.").catch(() => {});
+});
+
+transport.onSlashCommand(async (cmd) => {
+  try {
+    if (cmd.commandName === "stop") {
+      const result = await sessions.abort(cmd.channelId);
+      await cmd.reply(result.success ? "Stopped." : `Could not stop: ${result.error ?? "no active session in this channel"}`);
+      return;
+    }
+
+    if (cmd.commandName === "continue") {
+      if (!(await isPiPackageInstalled("pi-invisible-continue"))) {
+        await cmd.reply("`/continue` isn't available — pi-invisible-continue isn't installed on this host.");
+        return;
+      }
+      if (!sessions.getDirectory(cmd.channelId)) {
+        await cmd.reply("No active session in this channel.");
+        return;
+      }
+      sessions.sendPrompt(cmd.channelId, "/continue");
+      await cmd.reply("Continuing.");
+      return;
+    }
+
+    if (cmd.commandName === "model") {
+      if (cmd.subcommand === "list") {
+        const result = await sessions.getAvailableModels(cmd.channelId);
+        if (!result.success) {
+          await cmd.reply(`Could not list models: ${result.error ?? "no active session in this channel"}`);
+          return;
+        }
+        const models = (result.data as { models?: { provider: string; id: string }[] } | undefined)?.models ?? [];
+        const lines = models.map((model) => `- ${model.provider}/${model.id}`).join("\n");
+        await cmd.reply(lines || "No models available.");
+        return;
+      }
+
+      const provider = cmd.getStringOption("provider");
+      const modelId = cmd.getStringOption("model");
+      if (!provider || !modelId) {
+        await cmd.reply("Usage: `/model set provider:<provider> model:<model-id>`");
+        return;
+      }
+      const result = await sessions.setModel(cmd.channelId, provider, modelId);
+      await cmd.reply(result.success ? `Model set to ${provider}/${modelId}.` : `Could not set model: ${result.error}`);
+    }
+  } catch (err) {
+    console.error("[commands] slash command handling failed:", err);
+    await cmd.reply(`Command failed: ${describeError(err)}`).catch(() => {});
+  }
+});
+
+transport.onAutocomplete(async (auto) => {
+  try {
+    if (auto.commandName !== "model") {
+      await auto.respond([]);
+      return;
+    }
+
+    const result = await sessions.getAvailableModels(auto.channelId);
+    const models = result.success ? ((result.data as { models?: { provider: string; id: string }[] } | undefined)?.models ?? []) : [];
+    const query = auto.value.toLowerCase();
+
+    if (auto.optionName === "provider") {
+      const providers = [...new Set(models.map((m) => m.provider))].filter((p) => p.toLowerCase().includes(query));
+      await auto.respond(providers.map((p) => ({ name: p, value: p })));
+      return;
+    }
+
+    if (auto.optionName === "model") {
+      const provider = auto.getStringOption("provider");
+      const matches = models
+        .filter((m) => !provider || m.provider === provider)
+        .filter((m) => `${m.provider}/${m.id}`.toLowerCase().includes(query));
+      await auto.respond(matches.map((m) => ({ name: `${m.provider}/${m.id}`.slice(0, 100), value: m.id.slice(0, 100) })));
+    }
+  } catch (err) {
+    console.error("[commands] autocomplete failed:", err);
+    await auto.respond([]).catch(() => {});
+  }
 });
 
 await transport.connect();
